@@ -138,6 +138,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.ning.http.util.AsyncHttpProviderUtils.DEFAULT_CHARSET;
+import java.net.SocketAddress;
 import static org.jboss.netty.channel.Channels.pipeline;
 
 public class NettyAsyncHttpProvider extends SimpleChannelUpstreamHandler implements AsyncHttpProvider {
@@ -2313,9 +2314,20 @@ public class NettyAsyncHttpProvider extends SimpleChannelUpstreamHandler impleme
                     if (!future.getAndSetStatusReceived(true) && updateStatusAndInterrupt(handler, status)) {
                         finishUpdate(future, ctx, response.isChunked());
                         return;
-                    } else if (response.getHeaders().size() > 0 && updateHeadersAndInterrupt(handler, responseHeaders)) {
-                        finishUpdate(future, ctx, response.isChunked());
-                        return;
+                    } else if (response.getHeaders().size() > 0) {
+                        FluentCaseInsensitiveStringsMap tmpHeaders = responseHeaders.getHeaders();
+                        SocketAddress sa = ctx.getChannel().getRemoteAddress();
+                        if(sa instanceof InetSocketAddress){
+                            InetSocketAddress isa = (InetSocketAddress) sa;
+                            tmpHeaders.add("LINKFLUENCE-REMOTE-ADDR", isa.getAddress().getHostAddress());
+                            responseHeaders = new ResponseHeaders(future.getURI(), response, NettyAsyncHttpProvider.this, tmpHeaders);
+                        }
+                        
+                        if (updateHeadersAndInterrupt(handler, responseHeaders)) {
+
+                            finishUpdate(future, ctx, response.isChunked());
+                            return;
+                        }                            
                     } else if (!response.isChunked()) {
                         if (response.getContent().readableBytes() != 0) {
                             updateBodyAndInterrupt(future, handler, new ResponseBodyPart(future.getURI(), response, NettyAsyncHttpProvider.this, true));

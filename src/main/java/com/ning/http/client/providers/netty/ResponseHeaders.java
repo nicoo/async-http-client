@@ -45,6 +45,22 @@ public class ResponseHeaders extends HttpResponseHeaders {
         this.response = response;
         headers = computerHeaders();
     }
+    
+    
+    public ResponseHeaders(URI uri, HttpResponse response, AsyncHttpProvider provider, FluentCaseInsensitiveStringsMap headers) {
+        super(uri, provider, false);
+        this.trailingHeaders = null;
+        this.response = response;
+        this.headers = headers;
+    }
+    
+    public ResponseHeaders(URI uri, HttpResponse response, AsyncHttpProvider provider, HttpChunkTrailer traillingHeaders,
+            FluentCaseInsensitiveStringsMap headers){
+        super(uri, provider, true);
+        this.trailingHeaders = traillingHeaders;
+        this.response = response;
+        this.headers = headers;
+    }
 
     private FluentCaseInsensitiveStringsMap computerHeaders() {
         FluentCaseInsensitiveStringsMap h = new FluentCaseInsensitiveStringsMap();
