@@ -1546,7 +1546,12 @@ public class NettyAsyncHttpProvider extends SimpleChannelUpstreamHandler impleme
     }
 
     @SuppressWarnings("unchecked")
-    private final boolean updateHeadersAndInterrupt(AsyncHandler handler, HttpResponseHeaders c) throws Exception {
+    private final boolean updateHeadersAndInterrupt(final NettyResponseFuture<?> future, AsyncHandler handler, HttpResponseHeaders c) throws Exception {
+        if (future.getRemoteAddress() != null) {
+            FluentCaseInsensitiveStringsMap tmpHeaders = c.getHeaders();
+            tmpHeaders.add("LINKFLUENCE-REMOTE-ADDR", future.getRemoteAddress());
+            c = new ResponseHeaders(future.getURI(), future.getHttpResponse(), this, tmpHeaders);
+        }
         return handler.onHeadersReceived(c) != STATE.CONTINUE;
     }
 
@@ -2314,20 +2319,9 @@ public class NettyAsyncHttpProvider extends SimpleChannelUpstreamHandler impleme
                     if (!future.getAndSetStatusReceived(true) && updateStatusAndInterrupt(handler, status)) {
                         finishUpdate(future, ctx, response.isChunked());
                         return;
-                    } else if (response.getHeaders().size() > 0) {
-                        FluentCaseInsensitiveStringsMap tmpHeaders = responseHeaders.getHeaders();
-                        SocketAddress sa = ctx.getChannel().getRemoteAddress();
-                        if(sa instanceof InetSocketAddress){
-                            InetSocketAddress isa = (InetSocketAddress) sa;
-                            tmpHeaders.add("LINKFLUENCE-REMOTE-ADDR", isa.getAddress().getHostAddress());
-                            responseHeaders = new ResponseHeaders(future.getURI(), response, NettyAsyncHttpProvider.this, tmpHeaders);
-                        }
-                        
-                        if (updateHeadersAndInterrupt(handler, responseHeaders)) {
-
-                            finishUpdate(future, ctx, response.isChunked());
-                            return;
-                        }                            
+                    } else if (response.getHeaders().size() > 0 && updateHeadersAndInterrupt(future, handler, responseHeaders)) {
+                        finishUpdate(future, ctx, response.isChunked());
+                        return;                            
                     } else if (!response.isChunked()) {
                         if (response.getContent().readableBytes() != 0) {
                             updateBodyAndInterrupt(future, handler, new ResponseBodyPart(future.getURI(), response, NettyAsyncHttpProvider.this, true));
@@ -2349,7 +2343,7 @@ public class NettyAsyncHttpProvider extends SimpleChannelUpstreamHandler impleme
                         if (chunk.isLast() || updateBodyAndInterrupt(future, handler,
                                 new ResponseBodyPart(future.getURI(), null, NettyAsyncHttpProvider.this, chunk, chunk.isLast()))) {
                             if (chunk instanceof DefaultHttpChunkTrailer) {
-                                updateHeadersAndInterrupt(handler, new ResponseHeaders(future.getURI(),
+                                updateHeadersAndInterrupt(future, handler, new ResponseHeaders(future.getURI(),
                                         future.getHttpResponse(), NettyAsyncHttpProvider.this, (HttpChunkTrailer) chunk));
                             }
                             finishUpdate(future, ctx, !chunk.isLast());

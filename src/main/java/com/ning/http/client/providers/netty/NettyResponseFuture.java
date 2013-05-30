@@ -91,6 +91,7 @@ public final class NettyResponseFuture<V> extends AbstractListenableFuture<V> {
     private boolean allowConnect = false;
     private final ConnectionPoolKeyStrategy connectionPoolKeyStrategy;
     private final ProxyServer proxyServer;
+    private String remoteAddress;
 
     public NettyResponseFuture(URI uri,
                                Request request,
@@ -476,6 +477,15 @@ public final class NettyResponseFuture<V> extends AbstractListenableFuture<V> {
     public void setRequest(Request request) {
         this.request = request;
     }
+    
+    public void setRemoteAddress(String remoteAddress){
+       this.remoteAddress = remoteAddress; 
+    }
+    
+    public String getRemoteAddress(){
+        return remoteAddress;
+    }
+    
 
     /**
      * Return true if the {@link Future} cannot be recovered. There is some scenario where a connection can be

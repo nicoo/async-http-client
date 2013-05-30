@@ -81,7 +81,9 @@ final class NettyConnectListener<T> implements ChannelFutureListener {
                     throw new ConnectException("HostnameVerifier exception.");
                 }
             }
-
+            future.setRemoteAddress(InetSocketAddress.class.cast(channel.getRemoteAddress())
+                    .getAddress()
+                    .getHostAddress());
             future.provider().writeRequest(f.getChannel(), config, future, nettyRequest);
         } else {
             Throwable cause = f.getCause();
