@@ -16,6 +16,8 @@
  */
 package com.ning.http.client;
 
+import static com.ning.http.util.MiscUtil.isNonEmpty;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -24,6 +26,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -57,16 +60,35 @@ public class FluentCaseInsensitiveStringsMap implements Map<String, List<String>
         }
     }
 
+    public FluentCaseInsensitiveStringsMap add(String key, String value) {
+        if (key != null) {
+            String lcKey = key.toLowerCase(Locale.ENGLISH);
+            String realKey = keyLookup.get(lcKey);
+            
+            List<String> curValues = null;
+            if (realKey == null) {
+                keyLookup.put(lcKey, key);
+                curValues = new ArrayList<String>();
+                values.put(key, curValues);
+            } else {
+                curValues = values.get(realKey);
+            }
+
+            String nonNullValue = value != null? value : "";
+            curValues.add(nonNullValue);
+        }
+        return this;
+    }
+
     /**
      * Adds the specified values and returns this object.
      *
      * @param key    The key
-     * @param values The value(s); if null then this method has no effect. Use the empty string to
-     *               generate an empty value
+     *  @param values The value(s); if the array is null then this method has no effect. Individual null values are turned into empty strings
      * @return This object
      */
     public FluentCaseInsensitiveStringsMap add(String key, String... values) {
-        if ((values != null) && (values.length > 0)) {
+    	if (isNonEmpty(values)) {
             add(key, Arrays.asList(values));
         }
         return this;
@@ -103,7 +125,7 @@ public class FluentCaseInsensitiveStringsMap implements Map<String, List<String>
             List<String> nonNullValues = fetchValues(values);
 
             if (nonNullValues != null) {
-                String lcKey = key.toLowerCase();
+                String lcKey = key.toLowerCase(Locale.ENGLISH);
                 String realKey = keyLookup.get(lcKey);
                 List<String> curValues = null;
 
@@ -175,7 +197,7 @@ public class FluentCaseInsensitiveStringsMap implements Map<String, List<String>
     public FluentCaseInsensitiveStringsMap replace(final String key, final Collection<String> values) {
         if (key != null) {
             List<String> nonNullValues = fetchValues(values);
-            String lcKkey = key.toLowerCase();
+            String lcKkey = key.toLowerCase(Locale.ENGLISH);
             String realKey = keyLookup.get(lcKkey);
 
             if (nonNullValues == null) {
@@ -257,7 +279,7 @@ public class FluentCaseInsensitiveStringsMap implements Map<String, List<String>
      */
     public FluentCaseInsensitiveStringsMap delete(String key) {
         if (key != null) {
-            String lcKey = key.toLowerCase();
+            String lcKey = key.toLowerCase(Locale.ENGLISH);
             String realKey = keyLookup.remove(lcKey);
 
             if (realKey != null) {
@@ -366,7 +388,7 @@ public class FluentCaseInsensitiveStringsMap implements Map<String, List<String>
      */
     /* @Override */
     public boolean containsKey(Object key) {
-        return key == null ? false : keyLookup.containsKey(key.toString().toLowerCase());
+        return key == null ? false : keyLookup.containsKey(key.toString().toLowerCase(Locale.ENGLISH));
     }
 
     /**
@@ -431,7 +453,7 @@ public class FluentCaseInsensitiveStringsMap implements Map<String, List<String>
             return null;
         }
 
-        String lcKey = key.toString().toLowerCase();
+        String lcKey = key.toString().toLowerCase(Locale.ENGLISH);
         String realKey = keyLookup.get(lcKey);
 
         if (realKey == null) {

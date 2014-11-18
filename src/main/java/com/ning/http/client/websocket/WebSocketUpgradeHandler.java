@@ -32,6 +32,8 @@ public class WebSocketUpgradeHandler implements UpgradeHandler<WebSocket>, Async
     private final long maxByteSize;
     private final long maxTextSize;
     private final AtomicBoolean ok = new AtomicBoolean(false);
+    private final AtomicBoolean onSuccessCalled = new AtomicBoolean(false);
+    private int status;
 
     protected WebSocketUpgradeHandler(Builder b) {
         l = b.l;
@@ -48,6 +50,14 @@ public class WebSocketUpgradeHandler implements UpgradeHandler<WebSocket>, Async
         onFailure(t);
     }
 
+    public boolean touchSuccess() {
+        return onSuccessCalled.getAndSet(true);
+    }
+
+    public void resetSuccess() {
+        onSuccessCalled.set(false);
+    }
+
     /**
      * {@inheritDoc}
      */
@@ -61,6 +71,7 @@ public class WebSocketUpgradeHandler implements UpgradeHandler<WebSocket>, Async
      */
     @Override
     public STATE onStatusReceived(HttpResponseStatus responseStatus) throws Exception {
+        status = responseStatus.getStatusCode();
         if (responseStatus.getStatusCode() == 101) {
             return STATE.UPGRADE;
         } else {
@@ -81,6 +92,14 @@ public class WebSocketUpgradeHandler implements UpgradeHandler<WebSocket>, Async
      */
     @Override
     public WebSocket onCompleted() throws Exception {
+
+        if (status != 101) {
+            for (WebSocketListener w : l) {
+                w.onError(new IllegalStateException(String.format("Invalid Status Code %d", status)));
+            }
+            return null;
+        }
+
         if (webSocket == null) {
             throw new IllegalStateException("WebSocket is null");
         }
@@ -122,7 +141,7 @@ public class WebSocketUpgradeHandler implements UpgradeHandler<WebSocket>, Async
                 webSocket.addWebSocketListener(w);
             }
             w.onClose(webSocket);
-            if (WebSocketCloseCodeReasonListener.class.isAssignableFrom(w.getClass())) {
+            if (w instanceof WebSocketCloseCodeReasonListener) {
                 WebSocketCloseCodeReasonListener.class.cast(w).onClose(webSocket, status, reasonPhrase);
             }
         }
@@ -194,6 +213,7 @@ public class WebSocketUpgradeHandler implements UpgradeHandler<WebSocket>, Async
 
         /**
          * Build a {@link WebSocketUpgradeHandler}
+         *
          * @return a {@link WebSocketUpgradeHandler}
          */
         public WebSocketUpgradeHandler build() {

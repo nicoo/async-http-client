@@ -60,11 +60,11 @@ public class PropertiesBasedResumableProcessor implements ResumableAsyncHandler.
         FileOutputStream os = null;
         try {
 
-            if (!TMP.mkdirs()) {
+            if (!TMP.exists() && !TMP.mkdirs()) {
                 throw new IllegalStateException("Unable to create directory: " + TMP.getAbsolutePath());
             }
             File f = new File(TMP, storeName);
-            if (!f.createNewFile()) {
+            if (!f.exists() && !f.createNewFile()) {
                 throw new IllegalStateException("Unable to create temp file: " + f.getAbsolutePath());
             }
             if (!f.canWrite()) {
@@ -90,7 +90,7 @@ public class PropertiesBasedResumableProcessor implements ResumableAsyncHandler.
     }
 
     private static String append(Map.Entry<String, Long> e) {
-        return new StringBuffer(e.getKey()).append("=").append(e.getValue()).append("\n").toString();
+        return new StringBuilder(e.getKey()).append("=").append(e.getValue()).append("\n").toString();
     }
 
     /**
@@ -98,8 +98,9 @@ public class PropertiesBasedResumableProcessor implements ResumableAsyncHandler.
      */
     /* @Override */
     public Map<String, Long> load() {
+        Scanner scan = null;
         try {
-            Scanner scan = new Scanner(new File(TMP, storeName), "UTF-8");
+            scan = new Scanner(new File(TMP, storeName), "UTF-8");
             scan.useDelimiter("[=\n]");
 
             String key;
@@ -115,6 +116,9 @@ public class PropertiesBasedResumableProcessor implements ResumableAsyncHandler.
         } catch (Throwable ex) {
             // Survive any exceptions
             log.warn(ex.getMessage(), ex);
+        } finally {
+            if (scan != null)
+                scan.close();
         }
         return properties;
     }

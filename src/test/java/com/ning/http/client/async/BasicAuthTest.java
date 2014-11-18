@@ -22,10 +22,10 @@ import com.ning.http.client.HttpResponseBodyPart;
 import com.ning.http.client.HttpResponseHeaders;
 import com.ning.http.client.HttpResponseStatus;
 import com.ning.http.client.Realm;
+import com.ning.http.client.Realm.AuthScheme;
 import com.ning.http.client.Response;
-import com.ning.http.client.SimpleAsyncHttpClient;
-import com.ning.http.client.consumers.AppendableBodyConsumer;
 import com.ning.http.client.generators.InputStreamBodyGenerator;
+
 import org.apache.log4j.ConsoleAppender;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
@@ -48,6 +48,7 @@ import org.testng.annotations.Test;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -72,7 +73,9 @@ public abstract class BasicAuthTest extends AbstractBasicTest {
     protected final static String admin = "admin";
 
     private Server server2;
-
+    private Server serverNoAuth;
+    private int portNoAuth;
+    
     @BeforeClass(alwaysRun = true)
     @Override
     public void setUpGlobal() throws Exception {
@@ -201,6 +204,24 @@ public abstract class BasicAuthTest extends AbstractBasicTest {
         server2.stop();
     }
 
+    private void setUpServerNoAuth() throws Exception {
+        serverNoAuth = new Server();
+        portNoAuth = findFreePort();
+
+        Connector listener = new SelectChannelConnector();
+        listener.setHost("127.0.0.1");
+        listener.setPort(portNoAuth);
+
+        serverNoAuth.addConnector(listener);
+
+        serverNoAuth.setHandler(new SimpleHandler());
+        serverNoAuth.start();
+    }
+    
+    private void stopServerNoAuth() throws Exception {
+        serverNoAuth.stop();
+    }
+
     private class RedirectHandler extends AbstractHandler {
 
         public void handle(String s, Request r, HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
@@ -231,7 +252,7 @@ public abstract class BasicAuthTest extends AbstractBasicTest {
 
     private class SimpleHandler extends AbstractHandler {
         public void handle(String s, Request r, HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
-
+        	
             if (request.getHeader("X-401") != null) {
                 response.setStatus(401);
                 response.getOutputStream().flush();
@@ -287,9 +308,9 @@ public abstract class BasicAuthTest extends AbstractBasicTest {
 
             Future<Response> f = r.execute();
             Response resp = f.get(3, TimeUnit.SECONDS);
-            assertEquals(resp.getStatusCode(), HttpServletResponse.SC_OK);
-            assertNotNull(resp);
-            assertNotNull(resp.getHeader("X-Auth"));
+            assertNotNull(resp, "Response shouldn't be null");
+            assertEquals(resp.getStatusCode(), HttpServletResponse.SC_OK, "Status code should be 200-OK");
+            assertNotNull(resp.getHeader("X-Auth"), "X-Auth shouldn't be null");
 
         } finally {
             if (client != null)
@@ -305,6 +326,10 @@ public abstract class BasicAuthTest extends AbstractBasicTest {
 
     protected String getTargetUrl2() {
         return "http://127.0.0.1:" + port2 + "/uff";
+    }
+
+    protected String getTargetUrlNoAuth() {
+        return "http://127.0.0.1:" + portNoAuth + "/";
     }
 
     @Test(groups = { "standalone", "default_provider" })
@@ -351,10 +376,13 @@ public abstract class BasicAuthTest extends AbstractBasicTest {
     }
 
     @Test(groups = { "standalone", "default_provider" })
-    public void basicAuthTestPreemtiveTest() throws IOException, ExecutionException, TimeoutException, InterruptedException {
+    public void basicAuthTestPreemtiveTest() throws Exception, ExecutionException, TimeoutException, InterruptedException {
         AsyncHttpClient client = getAsyncHttpClient(null);
         try {
-            AsyncHttpClient.BoundRequestBuilder r = client.prepareGet(getTargetUrl()).setRealm((new Realm.RealmBuilder()).setPrincipal(user).setPassword(admin).setUsePreemptiveAuth(true).build());
+            setUpServerNoAuth();
+
+            AsyncHttpClient.BoundRequestBuilder r = client.prepareGet(getTargetUrlNoAuth())
+            		.setRealm((new Realm.RealmBuilder()).setScheme(AuthScheme.BASIC).setPrincipal(user).setPassword(admin).setUsePreemptiveAuth(true).build());
 
             Future<Response> f = r.execute();
             Response resp = f.get(3, TimeUnit.SECONDS);
@@ -363,6 +391,7 @@ public abstract class BasicAuthTest extends AbstractBasicTest {
             assertEquals(resp.getStatusCode(), HttpServletResponse.SC_OK);
         } finally {
             client.close();
+            stopServerNoAuth();
         }
     }
 
@@ -474,16 +503,20 @@ public abstract class BasicAuthTest extends AbstractBasicTest {
     }
 
     @Test(groups = { "standalone", "default_provider" })
-    public void StringBufferBodyConsumerTest() throws Throwable {
-        SimpleAsyncHttpClient client = new SimpleAsyncHttpClient.Builder().setRealmPrincipal(user).setRealmPassword(admin).setUrl(getTargetUrl()).setHeader("Content-Type", "text/html").build();
+    public void stringBuilderBodyConsumerTest() throws Throwable {
+        AsyncHttpClient client = getAsyncHttpClient(null);
+        
         try {
-            StringBuilder s = new StringBuilder();
-            Future<Response> future = client.post(new InputStreamBodyGenerator(new ByteArrayInputStream(MY_MESSAGE.getBytes())), new AppendableBodyConsumer(s));
+            AsyncHttpClient.BoundRequestBuilder r = client.preparePost(getTargetUrl())
+                    .setHeader("Content-Type", "text/html")
+                    .setBody(new InputStreamBodyGenerator(new ByteArrayInputStream(MY_MESSAGE.getBytes())))
+                    .setRealm((new Realm.RealmBuilder()).setPrincipal(user).setPassword(admin).build());
+            Future<Response> f = r.execute();
 
             System.out.println("waiting for response");
-            Response response = future.get();
+            Response response = f.get();
             assertEquals(response.getStatusCode(), 200);
-            assertEquals(s.toString(), MY_MESSAGE);
+            assertEquals(response.getResponseBody(), MY_MESSAGE);
             assertEquals(response.getStatusCode(), HttpServletResponse.SC_OK);
             assertNotNull(response.getHeader("X-Auth"));
         } finally {

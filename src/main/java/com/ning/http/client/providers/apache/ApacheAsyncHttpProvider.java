@@ -20,7 +20,6 @@ import com.ning.http.client.AsyncHttpProvider;
 import com.ning.http.client.AsyncHttpProviderConfig;
 import com.ning.http.client.Body;
 import com.ning.http.client.ByteArrayPart;
-import com.ning.http.client.Cookie;
 import com.ning.http.client.FilePart;
 import com.ning.http.client.HttpResponseBodyPart;
 import com.ning.http.client.HttpResponseHeaders;
@@ -36,6 +35,7 @@ import com.ning.http.client.Request;
 import com.ning.http.client.RequestBuilder;
 import com.ning.http.client.Response;
 import com.ning.http.client.StringPart;
+import com.ning.http.client.cookie.CookieEncoder;
 import com.ning.http.client.filter.FilterContext;
 import com.ning.http.client.filter.FilterException;
 import com.ning.http.client.filter.IOExceptionFilter;
@@ -45,6 +45,7 @@ import com.ning.http.client.resumable.ResumableAsyncHandler;
 import com.ning.http.util.AsyncHttpProviderUtils;
 import com.ning.http.util.ProxyUtils;
 import com.ning.http.util.UTF8UrlEncoder;
+
 import org.apache.commons.httpclient.CircularRedirectException;
 import org.apache.commons.httpclient.Credentials;
 import org.apache.commons.httpclient.DefaultHttpMethodRetryHandler;
@@ -85,6 +86,7 @@ import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
+
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -107,7 +109,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -129,6 +134,7 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
     private final AtomicInteger maxConnections = new AtomicInteger();
     private final MultiThreadedHttpConnectionManager connectionManager;
     private final HttpClientParams params;
+    private final ScheduledExecutorService reaper;
 
     static {
         final SocketFactory factory = new TrustingSSLSocketFactory();
@@ -157,13 +163,26 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
         params.setCookiePolicy(CookiePolicy.BROWSER_COMPATIBILITY);
         params.setParameter(HttpMethodParams.RETRY_HANDLER, new DefaultHttpMethodRetryHandler());
 
-        AsyncHttpProviderConfig<?, ?> providerConfig = config.getAsyncHttpProviderConfig();
-        if (providerConfig != null && ApacheAsyncHttpProvider.class.isAssignableFrom(providerConfig.getClass())) {
-            configure(ApacheAsyncHttpProviderConfig.class.cast(providerConfig));
-        }
+        reaper = getReaper(config.getAsyncHttpProviderConfig());
     }
 
-    private void configure(ApacheAsyncHttpProviderConfig config) {
+    private ScheduledExecutorService getReaper(AsyncHttpProviderConfig<?, ?> providerConfig) {
+
+        ScheduledExecutorService reaper = null;
+        if (providerConfig instanceof ApacheAsyncHttpProvider) {
+            reaper = ApacheAsyncHttpProviderConfig.class.cast(providerConfig).getReaper();
+        }
+
+        if (reaper == null)
+            reaper = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors(), new ThreadFactory() {
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "AsyncHttpClient-Reaper");
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+
+        return reaper;
     }
 
     public <T> ListenableFuture<T> execute(Request request, AsyncHandler<T> handler) throws IOException {
@@ -171,7 +190,7 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
             throw new IOException("Closed");
         }
 
-        if (ResumableAsyncHandler.class.isAssignableFrom(handler.getClass())) {
+        if (handler instanceof ResumableAsyncHandler) {
             request = ResumableAsyncHandler.class.cast(handler).adjustRequestRange(request);
         }
 
@@ -211,6 +230,7 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
     }
 
     public void close() {
+        reaper.shutdown();
         if (idleConnectionTimeoutThread != null) {
             idleConnectionTimeoutThread.shutdown();
             idleConnectionTimeoutThread = null;
@@ -357,9 +377,7 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
 
         method.setFollowRedirects(false);
         if (isNonEmpty(request.getCookies())) {
-            for (Cookie cookie : request.getCookies()) {
-                method.setRequestHeader("Cookie", AsyncHttpProviderUtils.encodeCookies(request.getCookies()));
-            }
+            method.setRequestHeader("Cookie", CookieEncoder.encode(request.getCookies()));
         }
 
         if (request.getHeaders() != null) {
@@ -447,20 +465,20 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
             try {
                 URI uri = null;
                 try {
-                    uri = AsyncHttpProviderUtils.createUri(request.getRawUrl());
+                    uri = AsyncHttpProviderUtils.createNonEmptyPathURI(request.getRawUrl());
                 } catch (IllegalArgumentException u) {
-                    uri = AsyncHttpProviderUtils.createUri(request.getUrl());
+                    uri = AsyncHttpProviderUtils.createNonEmptyPathURI(request.getUrl());
                 }
 
                 int delay = requestTimeout(config, future.getRequest().getPerRequestConfig());
                 if (delay != -1) {
                     ReaperFuture reaperFuture = new ReaperFuture(future);
-                    Future scheduledFuture = config.reaper().scheduleAtFixedRate(reaperFuture, delay, 500, TimeUnit.MILLISECONDS);
+                    Future scheduledFuture = reaper.scheduleAtFixedRate(reaperFuture, delay, 500, TimeUnit.MILLISECONDS);
                     reaperFuture.setScheduledFuture(scheduledFuture);
                     future.setReaperFuture(reaperFuture);
                 }
 
-                if (TransferCompletionHandler.class.isAssignableFrom(asyncHandler.getClass())) {
+                if (asyncHandler instanceof TransferCompletionHandler) {
                     throw new IllegalStateException(TransferCompletionHandler.class.getName() + "not supported by this provider");
                 }
 
@@ -578,9 +596,10 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
                     }
                 }
 
-                if (ProgressAsyncHandler.class.isAssignableFrom(asyncHandler.getClass())) {
-                    ProgressAsyncHandler.class.cast(asyncHandler).onHeaderWriteCompleted();
-                    ProgressAsyncHandler.class.cast(asyncHandler).onContentWriteCompleted();
+                if (asyncHandler instanceof ProgressAsyncHandler) {
+                	ProgressAsyncHandler progressAsyncHandler = (ProgressAsyncHandler) asyncHandler;
+                	progressAsyncHandler.onHeaderWriteCompleted();
+                	progressAsyncHandler.onContentWriteCompleted();
                 }
 
                 try {
@@ -592,7 +611,7 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
                 }
             } catch (Throwable t) {
 
-                if (IOException.class.isAssignableFrom(t.getClass()) && config.getIOExceptionFilters().size() > 0) {
+                if (t instanceof IOException && !config.getIOExceptionFilters().isEmpty()) {
                     FilterContext fc = new FilterContext.FilterContextBuilder().asyncHandler(asyncHandler)
                             .request(future.getRequest()).ioException(IOException.class.cast(t)).build();
 
@@ -602,7 +621,7 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
                         if (config.getMaxTotalConnections() != -1) {
                             maxConnections.decrementAndGet();
                         }
-                        future.done(null);
+                        future.done();
                         method.releaseConnection();
                     }
 
@@ -628,7 +647,7 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
                     if (config.getMaxTotalConnections() != -1) {
                         maxConnections.decrementAndGet();
                     }
-                    future.done(null);
+                    future.done();
 
                     // Crappy Apache HttpClient who blocks forever here with large files.
                     config.executorService().submit(new Runnable() {
@@ -643,20 +662,18 @@ public class ApacheAsyncHttpProvider implements AsyncHttpProvider {
         }
 
         private Throwable filterException(Throwable t) {
-            if (UnknownHostException.class.isAssignableFrom(t.getClass())) {
+            if (t instanceof UnknownHostException) {
                 t = new ConnectException(t.getMessage());
-            }
 
-            if (NoHttpResponseException.class.isAssignableFrom(t.getClass())) {
+            } else if (t instanceof NoHttpResponseException) {
                 int responseTimeoutInMs = config.getRequestTimeoutInMs();
 
                 if (request.getPerRequestConfig() != null && request.getPerRequestConfig().getRequestTimeoutInMs() != -1) {
                     responseTimeoutInMs = request.getPerRequestConfig().getRequestTimeoutInMs();
                 }
                 t = new TimeoutException(String.format("No response received after %s", responseTimeoutInMs));
-            }
 
-            if (SSLHandshakeException.class.isAssignableFrom(t.getClass())) {
+            } else if (t instanceof SSLHandshakeException) {
                 Throwable t2 = new ConnectException();
                 t2.initCause(t);
                 t = t2;

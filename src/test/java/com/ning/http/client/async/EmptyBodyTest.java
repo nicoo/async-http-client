@@ -83,13 +83,15 @@ public abstract class EmptyBodyTest extends AbstractBasicTest {
                 }
 
                 public STATE onBodyPartReceived(HttpResponseBodyPart e) throws Exception {
-                    String s = new String(e.getBodyPartBytes());
-                    log.info("got part: {}", s);
-                    if (s.isEmpty()) {
-                        // noinspection ThrowableInstanceNeverThrown
+
+                    byte[] bytes = e.getBodyPartBytes();
+
+                    if (bytes.length != 0) {
+                        String s = new String(bytes);
+                        log.info("got part: {}", s);
                         log.warn("Sampling stacktrace.", new Throwable("trace that, we should not get called for empty body."));
+                        queue.put(s);
                     }
-                    queue.put(s);
                     return STATE.CONTINUE;
                 }
 
@@ -133,7 +135,7 @@ public abstract class EmptyBodyTest extends AbstractBasicTest {
             assertNotNull(response);
             assertEquals(response.getStatusCode(), 204);
             assertEquals(response.getResponseBody(), "");
-            assertTrue(InputStream.class.isAssignableFrom(response.getResponseBodyAsStream().getClass()));
+            assertTrue(response.getResponseBodyAsStream() instanceof InputStream);
             assertEquals(response.getResponseBodyAsStream().read(), -1);
 
         } finally {

@@ -17,12 +17,6 @@ package com.ning.http.client;
 
 import static com.ning.http.util.MiscUtil.isNonEmpty;
 
-import com.ning.http.client.Request.EntityWriter;
-import com.ning.http.util.AsyncHttpProviderUtils;
-import com.ning.http.util.UTF8UrlEncoder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.File;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
@@ -36,6 +30,14 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.ning.http.client.Request.EntityWriter;
+import com.ning.http.client.cookie.Cookie;
+import com.ning.http.util.AsyncHttpProviderUtils;
+import com.ning.http.util.UTF8UrlEncoder;
 
 /**
  * Builder for {@link Request}
@@ -55,7 +57,7 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         private InetAddress address;
         private InetAddress localAddress;
         private FluentCaseInsensitiveStringsMap headers = new FluentCaseInsensitiveStringsMap();
-        private Collection<Cookie> cookies = new ArrayList<Cookie>();
+        private ArrayList<Cookie> cookies;
         private byte[] byteData;
         private String stringData;
         private InputStream streamData;
@@ -172,8 +174,10 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
 
             AsyncHttpProviderUtils.validateSupportedScheme(originalUri);
 
-            StringBuilder builder = new StringBuilder();
-            builder.append(originalUri.getScheme()).append("://").append(originalUri.getAuthority());
+            StringBuilder builder = new StringBuilder()//
+                    .append(originalUri.getScheme())//
+                    .append("://")//
+                    .append(originalUri.getRawAuthority());
             if (isNonEmpty(originalUri.getRawPath())) {
                 builder.append(originalUri.getRawPath());
             } else {
@@ -222,7 +226,7 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
 
         /* @Override */
         public Collection<Cookie> getCookies() {
-            return Collections.unmodifiableCollection(cookies);
+            return cookies != null ? Collections.unmodifiableCollection(cookies) : Collections.<Cookie> emptyList();
         }
 
         /* @Override */
@@ -296,7 +300,7 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         }
 
         public boolean isRedirectEnabled() {
-            return (followRedirects != null && followRedirects);
+            return followRedirects != null && followRedirects;
         }
 
         public boolean isRedirectOverrideSet() {
@@ -355,6 +359,8 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
     private final Class<T> derived;
     protected final RequestImpl request;
     protected boolean useRawUrl = false;
+    protected String baseURL;
+    protected SignatureCalculator signatureCalculator;
 
     protected RequestBuilderBase(Class<T> derived, String method, boolean rawUrls) {
         this.derived = derived;
@@ -370,7 +376,17 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
     }
 
     public T setUrl(String url) {
-        request.originalUri = buildURI(url);
+        this.baseURL = url;
+        return setURI(URI.create(url));
+    }
+
+    public T setURI(URI uri) {
+        if (uri.getHost() == null)
+            throw new NullPointerException("uri.host");
+        if (uri.getPath() == null)
+            throw new NullPointerException("uri.path");
+        request.originalUri = uri;
+        addQueryParameters(request.originalUri);
         request.uri = null;
         request.rawUri = null;
         return derived.cast(this);
@@ -386,32 +402,7 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         return derived.cast(this);
     }
 
-    private URI buildURI(String url) {
-        URI uri = URI.create(url);
-        StringBuilder buildedUrl = new StringBuilder();
-
-        if (uri.getScheme() != null) {
-            buildedUrl.append(uri.getScheme());
-            buildedUrl.append("://");
-        }
-
-        if (uri.getAuthority() != null) {
-            buildedUrl.append(uri.getAuthority());
-        }
-        if (uri.getRawPath() != null) {
-            buildedUrl.append(uri.getRawPath());
-        } else {
-            // AHC-96
-            // Let's try to derive it
-            if (url.indexOf("://") == -1) {
-                String s = buildedUrl.toString();
-                url = s + url.substring(uri.getScheme().length() + 1);
-                return buildURI(url);
-            } else {
-                throw new IllegalArgumentException("Invalid url " + uri.toString());
-            }
-        }
-
+    private void addQueryParameters(URI uri) {
         if (isNonEmpty(uri.getRawQuery())) {
             String[] queries = uri.getRawQuery().split("&");
             int pos;
@@ -432,7 +423,6 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
                 }
             }
         }
-        return uri;
     }
 
     public T setVirtualHost(String virtualHost) {
@@ -470,16 +460,56 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         return derived.cast(this);
     }
 
+    private void lazyInitCookies() {
+        if (request.cookies == null)
+            request.cookies = new ArrayList<Cookie>(3);
+    }
+
+    public T setCookies(Collection<Cookie> cookies) {
+        request.cookies = new ArrayList<Cookie>(cookies);
+        return derived.cast(this);
+    }
+
     public T addCookie(Cookie cookie) {
+        lazyInitCookies();
         request.cookies.add(cookie);
         return derived.cast(this);
     }
 
-    private void resetParameters() {
+    public T addOrReplaceCookie(Cookie cookie) {
+        String cookieKey = cookie.getName();
+        boolean replace = false;
+        int index = 0;
+        lazyInitCookies();
+        for (Cookie c : request.cookies) {
+            if (c.getName().equals(cookieKey)) {
+                replace = true;
+                break;
+            }
+
+            index++;
+        }
+        if (replace)
+            request.cookies.set(index, cookie);
+        else
+            request.cookies.add(cookie);
+        return derived.cast(this);
+    }
+    
+    public void resetCookies() {
+        if (request.cookies != null)
+            request.cookies.clear();
+    }
+    
+    public void resetQueryParameters() {
+        request.queryParams = null;
+    }
+    
+    public void resetParameters() {
         request.params = null;
     }
 
-    private void resetNonMultipartData() {
+    public void resetNonMultipartData() {
         request.byteData = null;
         request.stringData = null;
         request.streamData = null;
@@ -487,24 +517,16 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         request.length = -1;
     }
 
-    private void resetMultipartData() {
+    public void resetMultipartData() {
         request.parts = null;
     }
 
-    private void checkIfBodyAllowed() {
-        if ("HEAD".equals(request.method)) {
-            throw new IllegalArgumentException("Can NOT set Body on HTTP Request Method HEAD.");
-        }
-    }
-
     public T setBody(File file) {
-        checkIfBodyAllowed();
         request.file = file;
         return derived.cast(this);
     }
 
-    public T setBody(byte[] data) throws IllegalArgumentException {
-        checkIfBodyAllowed();
+    public T setBody(byte[] data) {
         resetParameters();
         resetNonMultipartData();
         resetMultipartData();
@@ -512,8 +534,7 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         return derived.cast(this);
     }
 
-    public T setBody(String data) throws IllegalArgumentException {
-        checkIfBodyAllowed();
+    public T setBody(String data) {
         resetParameters();
         resetNonMultipartData();
         resetMultipartData();
@@ -521,8 +542,7 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         return derived.cast(this);
     }
 
-    public T setBody(InputStream stream) throws IllegalArgumentException {
-        checkIfBodyAllowed();
+    public T setBody(InputStream stream) {
         resetParameters();
         resetNonMultipartData();
         resetMultipartData();
@@ -534,8 +554,7 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         return setBody(dataWriter, -1);
     }
 
-    public T setBody(EntityWriter dataWriter, long length) throws IllegalArgumentException {
-        checkIfBodyAllowed();
+    public T setBody(EntityWriter dataWriter, long length) {
         resetParameters();
         resetNonMultipartData();
         resetMultipartData();
@@ -545,7 +564,6 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
     }
 
     public T setBody(BodyGenerator bodyGenerator) {
-        checkIfBodyAllowed();
         request.bodyGenerator = bodyGenerator;
         return derived.cast(this);
     }
@@ -567,7 +585,7 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         return derived.cast(this);
     }
 
-    public T addParameter(String key, String value) throws IllegalArgumentException {
+    public T addParameter(String key, String value) {
         resetNonMultipartData();
         resetMultipartData();
         if (request.params == null) {
@@ -577,21 +595,21 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         return derived.cast(this);
     }
 
-    public T setParameters(FluentStringsMap parameters) throws IllegalArgumentException {
+    public T setParameters(FluentStringsMap parameters) {
         resetNonMultipartData();
         resetMultipartData();
         request.params = new FluentStringsMap(parameters);
         return derived.cast(this);
     }
 
-    public T setParameters(Map<String, Collection<String>> parameters) throws IllegalArgumentException {
+    public T setParameters(Map<String, Collection<String>> parameters) {
         resetNonMultipartData();
         resetMultipartData();
         request.params = new FluentStringsMap(parameters);
         return derived.cast(this);
     }
 
-    public T addBodyPart(Part part) throws IllegalArgumentException {
+    public T addBodyPart(Part part) {
         resetParameters();
         resetNonMultipartData();
         if (request.parts == null) {
@@ -641,10 +659,48 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
         return derived.cast(this);
     }
 
-    public Request build() {
-        if ((request.length < 0) && (request.streamData == null) && allowBody(request.getMethod())) {
+    public T setSignatureCalculator(SignatureCalculator signatureCalculator) {
+        this.signatureCalculator = signatureCalculator;
+        return derived.cast(this);
+    }
+
+    private void executeSignatureCalculator() {
+        /* Let's first calculate and inject signature, before finalizing actual build
+         * (order does not matter with current implementation but may in future)
+         */
+        if (signatureCalculator != null) {
+            String url = baseURL != null ? baseURL : request.originalUri.toString();
+            // Should not include query parameters, ensure:
+            int i = url.indexOf('?');
+            if (i != -1) {
+                url = url.substring(0, i);
+            }
+            signatureCalculator.calculateAndAddSignature(url, request, this);
+        }
+    }
+    
+    private void computeRequestCharset() {
+        if (request.charset == null) {
+            try {
+                final String contentType = request.headers.getFirstValue("Content-Type");
+                if (contentType != null) {
+                    final String charset = AsyncHttpProviderUtils.parseCharset(contentType);
+                    if (charset != null) {
+                        // ensure that if charset is provided with the Content-Type header,
+                        // we propagate that down to the charset of the Request object
+                        request.charset = charset;
+                    }
+                }
+            } catch (Throwable e) {
+                // NoOp -- we can't fix the Content-Type or charset from here
+            }
+        }
+    }
+    
+    private void computeRequestLength() {
+        if (request.length < 0 && request.streamData == null) {
             // can't concatenate content-length
-            String contentLength = request.headers.getFirstValue("Content-Length");
+            final String contentLength = request.headers.getFirstValue("Content-Length");
 
             if (contentLength != null) {
                 try {
@@ -654,30 +710,12 @@ public abstract class RequestBuilderBase<T extends RequestBuilderBase<T>> {
                 }
             }
         }
+    }
+    
+    public Request build() {
+        executeSignatureCalculator();
+        computeRequestCharset();
+        computeRequestLength();
         return request;
-    }
-
-    private boolean allowBody(String method) {
-        return !(method.equalsIgnoreCase("GET") || method.equalsIgnoreCase("OPTIONS") || method.equalsIgnoreCase("TRACE") || method.equalsIgnoreCase("HEAD"));
-    }
-
-    public T addOrReplaceCookie(Cookie cookie) {
-        String cookieKey = cookie.getName();
-        boolean replace = false;
-        int index = 0;
-        for (Cookie c : request.cookies) {
-            if (c.getName().equals(cookieKey)) {
-                replace = true;
-                break;
-            }
-
-            index++;
-        }
-        if (replace) {
-            ((ArrayList<Cookie>) request.cookies).set(index, cookie);
-        } else {
-            request.cookies.add(cookie);
-        }
-        return derived.cast(this);
     }
 }

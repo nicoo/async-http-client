@@ -15,22 +15,6 @@ package com.ning.http.client.providers.grizzly;
 
 import static com.ning.http.util.MiscUtil.isNonEmpty;
 
-import com.ning.http.client.Cookie;
-import com.ning.http.client.FluentCaseInsensitiveStringsMap;
-import com.ning.http.client.HttpResponseBodyPart;
-import com.ning.http.client.HttpResponseHeaders;
-import com.ning.http.client.HttpResponseStatus;
-import com.ning.http.client.Response;
-import com.ning.http.util.AsyncHttpProviderUtils;
-
-import org.glassfish.grizzly.Buffer;
-import org.glassfish.grizzly.http.Cookies;
-import org.glassfish.grizzly.http.CookiesBuilder;
-import org.glassfish.grizzly.utils.Charsets;
-import org.glassfish.grizzly.memory.Buffers;
-import org.glassfish.grizzly.memory.MemoryManager;
-import org.glassfish.grizzly.utils.BufferInputStream;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
@@ -41,6 +25,22 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+
+import org.glassfish.grizzly.Buffer;
+import org.glassfish.grizzly.http.Cookies;
+import org.glassfish.grizzly.http.CookiesBuilder;
+import org.glassfish.grizzly.memory.Buffers;
+import org.glassfish.grizzly.memory.MemoryManager;
+import org.glassfish.grizzly.utils.BufferInputStream;
+import org.glassfish.grizzly.utils.Charsets;
+
+import com.ning.http.client.FluentCaseInsensitiveStringsMap;
+import com.ning.http.client.HttpResponseBodyPart;
+import com.ning.http.client.HttpResponseHeaders;
+import com.ning.http.client.HttpResponseStatus;
+import com.ning.http.client.Response;
+import com.ning.http.client.cookie.Cookie;
+import com.ning.http.util.AsyncHttpProviderUtils;
 
 /**
  * {@link com.ning.http.client.HttpResponseBodyPart} implementation using the Grizzly 2.0 HTTP client
@@ -172,9 +172,11 @@ public class GrizzlyResponse implements Response {
      * {@inheritDoc}
      */
     public byte[] getResponseBodyAsBytes() throws IOException {
-
-        return getResponseBody().getBytes();
-
+        final byte[] responseBodyBytes = new byte[responseBody.remaining()];
+        final int origPos = responseBody.position();
+        responseBody.get(responseBodyBytes);
+        responseBody.position(origPos);
+        return responseBodyBytes;
     }
 
     public ByteBuffer getResponseBodyAsByteBuffer() throws IOException {
@@ -246,9 +248,16 @@ public class GrizzlyResponse implements Response {
      * {@inheritDoc}
      */
     public boolean isRedirected() {
-
-        return between(status.getStatusCode(), 300, 399);
-
+        switch (status.getStatusCode()) {
+        case 301:
+        case 302:
+        case 303:
+        case 307:
+        case 308:
+            return true;
+        default:
+            return false;
+        }
     }
 
 
@@ -265,7 +274,7 @@ public class GrizzlyResponse implements Response {
             List<String> values = headers.getHeaders().get("set-cookie");
             if (isNonEmpty(values)) {
                 CookiesBuilder.ServerCookiesBuilder builder =
-                    new CookiesBuilder.ServerCookiesBuilder(false);
+                    new CookiesBuilder.ServerCookiesBuilder(false, true);
                 for (String header : values) {
                     builder.parse(header);
                 }
@@ -312,13 +321,15 @@ public class GrizzlyResponse implements Response {
         final org.glassfish.grizzly.http.Cookie[] grizzlyCookies = cookies.get();
         List<Cookie> convertedCookies = new ArrayList<Cookie>(grizzlyCookies.length);
         for (org.glassfish.grizzly.http.Cookie gCookie : grizzlyCookies) {
-            convertedCookies.add(new Cookie(gCookie.getDomain(),
-                                   gCookie.getName(),
+            convertedCookies.add(new Cookie(gCookie.getName(),
                                    gCookie.getValue(),
+                                   gCookie.getValue(),
+                                   gCookie.getDomain(),
                                    gCookie.getPath(),
+                                   -1L,
                                    gCookie.getMaxAge(),
                                    gCookie.isSecure(),
-                                   gCookie.getVersion()));
+                                   false));
         }
         return Collections.unmodifiableList(convertedCookies);
 
@@ -343,14 +354,4 @@ public class GrizzlyResponse implements Response {
         return Charsets.lookupCharset(charsetLocal);
 
     }
-
-
-    private boolean between(final int value,
-                            final int lowerBound,
-                            final int upperBound) {
-
-        return (value >= lowerBound && value <= upperBound);
-
-    }
-
 }

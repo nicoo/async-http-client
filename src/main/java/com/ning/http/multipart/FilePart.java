@@ -34,11 +34,6 @@ public class FilePart extends PartBase {
     public static final String DEFAULT_CONTENT_TYPE = "application/octet-stream";
 
     /**
-     * Default charset of file attachments.
-     */
-    public static final String DEFAULT_CHARSET = "ISO-8859-1";
-
-    /**
      * Default transfer encoding of file attachments.
      */
     public static final String DEFAULT_TRANSFER_ENCODING = "binary";
@@ -68,10 +63,9 @@ public class FilePart extends PartBase {
      */
     public FilePart(String name, PartSource partSource, String contentType, String charset, String contentId) {
 
-        super(name, contentType == null ? DEFAULT_CONTENT_TYPE : contentType, charset == null ? "ISO-8859-1" : charset, DEFAULT_TRANSFER_ENCODING, contentId);
-        if (partSource == null) {
-            throw new IllegalArgumentException("Source may not be null");
-        }
+        super(name, contentType == null ? DEFAULT_CONTENT_TYPE : contentType, charset, DEFAULT_TRANSFER_ENCODING, contentId);
+        if (partSource == null)
+            throw new NullPointerException("parSource");
         this.source = partSource;
     }
 
@@ -147,13 +141,25 @@ public class FilePart extends PartBase {
      */
     protected void sendDispositionHeader(OutputStream out) throws IOException {
         String filename = this.source.getFileName();
+        super.sendDispositionHeader(out);
         if (filename != null) {
-            super.sendDispositionHeader(out);
             out.write(FILE_NAME_BYTES);
             out.write(QUOTE_BYTES);
             out.write(MultipartEncodingUtil.getAsciiBytes(filename));
             out.write(QUOTE_BYTES);
         }
+    }
+
+    protected long dispositionHeaderLength() {
+        String filename = this.source.getFileName();
+        long length = super.dispositionHeaderLength();
+        if (filename != null) {
+            length += FILE_NAME_BYTES.length;
+            length += QUOTE_BYTES.length;
+            length += MultipartEncodingUtil.getAsciiBytes(filename).length;
+            length += QUOTE_BYTES.length;
+        }
+        return length;
     }
 
     /**
@@ -197,17 +203,16 @@ public class FilePart extends PartBase {
      * 
      * @return The source.
      */
-    protected PartSource getSource() {
-        return this.source;
+    public PartSource getSource() {
+        return source;
     }
 
     /**
      * Return the length of the data.
      * 
      * @return The length.
-     * @throws IOException if an IO problem occurs
      */
-    protected long lengthOfData() throws IOException {
+    protected long lengthOfData() {
         return source.getLength();
     }
 

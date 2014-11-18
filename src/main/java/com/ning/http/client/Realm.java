@@ -18,9 +18,6 @@ package com.ning.http.client;
 
 import static com.ning.http.util.MiscUtil.isNonEmpty;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -49,6 +46,8 @@ public class Realm {
     private final String enc;
     private final String host;
     private final boolean messageType2Received;
+    private final boolean useAbsoluteURI;
+    private final boolean omitQuery;
 
     private final String domain;
 
@@ -74,8 +73,13 @@ public class Realm {
                   String uri,
                   String method,
                   boolean usePreemptiveAuth,
-                  String domain, String enc, String host, boolean messageType2Received,
-                  String opaque) {
+                  String domain,
+                  String enc,
+                  String host,
+                  boolean messageType2Received,
+                  String opaque,
+                  boolean useAbsoluteURI,
+                  boolean omitQuery) {
 
         this.principal = principal;
         this.password = password;
@@ -95,6 +99,8 @@ public class Realm {
         this.enc = enc;
         this.host = host;
         this.messageType2Received = messageType2Received;
+        this.useAbsoluteURI = useAbsoluteURI;
+        this.omitQuery = omitQuery;
     }
 
     public String getPrincipal() {
@@ -199,6 +205,14 @@ public class Realm {
         return messageType2Received;
     }
 
+    public boolean isUseAbsoluteURI() {
+        return useAbsoluteURI;
+    }
+
+    public boolean isOmitQuery() {
+        return omitQuery;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -217,6 +231,8 @@ public class Realm {
         if (response != null ? !response.equals(realm.response) : realm.response != null) return false;
         if (scheme != realm.scheme) return false;
         if (uri != null ? !uri.equals(realm.uri) : realm.uri != null) return false;
+        if (useAbsoluteURI != !realm.useAbsoluteURI) return false;
+        if (omitQuery != !realm.omitQuery) return false;
 
         return true;
     }
@@ -236,6 +252,8 @@ public class Realm {
                 ", cnonce='" + cnonce + '\'' +
                 ", uri='" + uri + '\'' +
                 ", methodName='" + methodName + '\'' +
+                ", useAbsoluteURI='" + useAbsoluteURI + '\'' +
+                ", omitQuery='" + omitQuery + '\'' +
                 '}';
     }
 
@@ -260,8 +278,6 @@ public class Realm {
      */
     public static class RealmBuilder {
 
-        private static final Logger logger = LoggerFactory.getLogger(RealmBuilder.class);
-
         //
         //  Portions of code (newCnonce, newResponse) are highly inspired be Jetty 6 BasicAuthentication.java class.
         //  This code is already Apache licenced.
@@ -285,6 +301,8 @@ public class Realm {
         private String enc = "UTF-8";
         private String host = "localhost";
         private boolean messageType2Received = false;
+        private boolean useAbsoluteURI = true;
+        private boolean omitQuery = false;
 
         @Deprecated
         public String getDomain() {
@@ -433,13 +451,34 @@ public class Realm {
             return this;
         }
 
+        public boolean isUseAbsoluteURI() {
+            return useAbsoluteURI;
+        }
+        
+        public RealmBuilder setUseAbsoluteURI(boolean useAbsoluteURI) {
+            this.useAbsoluteURI = useAbsoluteURI;
+            return this;
+        }
+        
+        public boolean isOmitQuery() {
+            return omitQuery;
+        }
+        
+        public RealmBuilder setOmitQuery(boolean omitQuery) {
+            this.omitQuery = omitQuery;
+            return this;
+        }
+        
         public RealmBuilder parseWWWAuthenticateHeader(String headerLine) {
             setRealmName(match(headerLine, "realm"));
             setNonce(match(headerLine, "nonce"));
-            setAlgorithm(match(headerLine, "algorithm"));
+            String algorithm = match(headerLine, "algorithm");
+            if (isNonEmpty(algorithm)) {
+                setAlgorithm(algorithm);
+            }
             setOpaque(match(headerLine, "opaque"));
             setQop(match(headerLine, "qop"));
-            if (getNonce() != null && !getNonce().equalsIgnoreCase("")) {
+            if (isNonEmpty(getNonce())) {
                 setScheme(AuthScheme.DIGEST);
             } else {
                 setScheme(AuthScheme.BASIC);
@@ -469,6 +508,8 @@ public class Realm {
             setNtlmDomain(clone.getNtlmDomain());
             setNtlmHost(clone.getNtlmHost());
             setNtlmMessageType2Received(clone.isNtlmMessageType2Received());
+            setUseAbsoluteURI(clone.isUseAbsoluteURI());
+            setOmitQuery(clone.isOmitQuery());
             return this;
         }
 
@@ -526,12 +567,23 @@ public class Realm {
             byte[] ha1 = md.digest();
 
             md.reset();
+
+            //HA2 if qop is auth-int is methodName:url:md5(entityBody)
             md.update(new StringBuilder(methodName)
                     .append(':')
                     .append(uri).toString().getBytes("ISO-8859-1"));
             byte[] ha2 = md.digest();
 
-            md.update(new StringBuilder(toBase16(ha1))
+            if(qop==null || qop.equals("")) {
+                 md.update(new StringBuilder(toBase16(ha1))
+                    .append(':')
+                    .append(nonce)
+                    .append(':')
+                    .append(toBase16(ha2)).toString().getBytes("ISO-8859-1"));
+
+             } else {
+                 //qop ="auth" or "auth-int"
+                 md.update(new StringBuilder(toBase16(ha1))
                     .append(':')
                     .append(nonce)
                     .append(':')
@@ -542,6 +594,8 @@ public class Realm {
                     .append(qop)
                     .append(':')
                     .append(toBase16(ha2)).toString().getBytes("ISO-8859-1"));
+            }
+
             byte[] digest = md.digest();
 
             response = toHexString(digest);
@@ -607,7 +661,9 @@ public class Realm {
                     enc,
                     host,
                     messageType2Received,
-                    opaque);
+                    opaque,
+                    useAbsoluteURI,
+                    omitQuery);
         }
     }
 

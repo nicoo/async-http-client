@@ -43,7 +43,7 @@ public class InputStreamBodyGenerator implements BodyGenerator {
         if (inputStream.markSupported()) {
             inputStream.mark(0);
         } else {
-            logger.info("inputStream.markSupported() not supported. Some features will not works");
+            logger.info("inputStream.markSupported() not supported. Some features will not work.");
         }
     }
 
@@ -79,7 +79,7 @@ public class InputStreamBodyGenerator implements BodyGenerator {
 
             if (patchNettyChunkingIssue) {
                 if (read == -1) {
-                    // Since we are chuncked, we must output extra bytes before considering the input stream closed.
+                    // Since we are chunked, we must output extra bytes before considering the input stream closed.
                     // chunking requires to end the chunking:
                     // - A Terminating chunk of  "0\r\n".getBytes(),
                     // - Then a separate packet of "\r\n".getBytes()
@@ -117,6 +117,10 @@ public class InputStreamBodyGenerator implements BodyGenerator {
             } else {
                 if (read > 0) {
                     buffer.put(chunk, 0, read);
+                } else {
+                    if (inputStream.markSupported()) {
+                        inputStream.reset();
+                    }
                 }
             }
             return read;

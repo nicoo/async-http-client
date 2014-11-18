@@ -24,5 +24,4 @@ public class GrizzlyBasicAuthTest extends BasicAuthTest {
     public AsyncHttpClient getAsyncHttpClient(AsyncHttpClientConfig config) {
         return ProviderUtil.grizzlyProvider(config);
     }
-
 }

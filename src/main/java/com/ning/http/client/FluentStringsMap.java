@@ -54,12 +54,24 @@ public class FluentStringsMap implements Map<String, List<String>>, Iterable<Map
         }
     }
 
+    public FluentStringsMap add(String key, String value) {
+        if (key != null) {
+            List<String> curValues = values.get(key);
+
+            if (curValues == null) {
+                curValues = new ArrayList<String>(1);
+                values.put(key, curValues);
+            }
+            curValues.add(value);
+        }
+        return this;
+    }
+
     /**
      * Adds the specified values and returns this object.
      *
      * @param key    The key
-     * @param values The value(s); if null then this method has no effect. Use the empty string to
-     *               generate an empty value
+     * @param values The value(s); if the array is null then this method has no effect
      * @return This object
      */
     public FluentStringsMap add(String key, String... values) {
@@ -69,44 +81,21 @@ public class FluentStringsMap implements Map<String, List<String>>, Iterable<Map
         return this;
     }
 
-    private List<String> fetchValues(Collection<String> values) {
-        List<String> result = null;
-
-        if (values != null) {
-            for (String value : values) {
-                if (value == null) {
-                    value = "";
-                }
-                if (result == null) {
-                    // lazy initialization
-                    result = new ArrayList<String>();
-                }
-                result.add(value);
-            }
-        }
-        return result;
-    }
-
     /**
      * Adds the specified values and returns this object.
      *
      * @param key    The key
-     * @param values The value(s); if null then this method has no effect. Use an empty collection
-     *               to generate an empty value
+     * @param values The value(s); if the array is null then this method has no effect
      * @return This object
      */
     public FluentStringsMap add(String key, Collection<String> values) {
-        if (key != null) {
-            List<String> nonNullValues = fetchValues(values);
+        if (key != null && isNonEmpty(values)) {
+            List<String> curValues = this.values.get(key);
 
-            if (nonNullValues != null) {
-                List<String> curValues = this.values.get(key);
-
-                if (curValues == null) {
-                    curValues = new ArrayList<String>();
-                    this.values.put(key, curValues);
-                }
-                curValues.addAll(nonNullValues);
+            if (curValues == null) {
+                this.values.put(key, new ArrayList<String>(values));
+            } else {
+                curValues.addAll(values);
             }
         }
         return this;
@@ -162,12 +151,10 @@ public class FluentStringsMap implements Map<String, List<String>>, Iterable<Map
      */
     public FluentStringsMap replace(final String key, final Collection<String> values) {
         if (key != null) {
-            List<String> nonNullValues = fetchValues(values);
-
-            if (nonNullValues == null) {
+            if (values == null) {
                 this.values.remove(key);
             } else {
-                this.values.put(key, nonNullValues);
+                this.values.put(key, new ArrayList<String>(values));
             }
         }
         return this;

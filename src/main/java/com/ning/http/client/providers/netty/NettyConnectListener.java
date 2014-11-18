@@ -33,13 +33,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.net.ssl.HostnameVerifier;
+
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.channels.ClosedChannelException;
 import java.util.concurrent.atomic.AtomicBoolean;
-
 
 /**
  * Non Blocking connect.
@@ -52,11 +52,10 @@ final class NettyConnectListener<T> implements ChannelFutureListener {
     private final AtomicBoolean handshakeDone = new AtomicBoolean(false);
 
     private NettyConnectListener(AsyncHttpClientConfig config,
-                                 NettyResponseFuture<T> future,
-                                 HttpRequest nettyRequest) {
+                                 NettyResponseFuture<T> future) {
         this.config = config;
         this.future = future;
-        this.nettyRequest = nettyRequest;
+        this.nettyRequest = future.getNettyRequest();
     }
 
     public NettyResponseFuture<T> future() {
@@ -74,23 +73,26 @@ final class NettyConnectListener<T> implements ChannelFutureListener {
             }
 
             HostnameVerifier v = config.getHostnameVerifier();
-            if (sslHandler != null && !AllowAllHostnameVerifier.class.isAssignableFrom(v.getClass())) {
+            if (sslHandler != null && !(v instanceof AllowAllHostnameVerifier)) {
                 // TODO: channel.getRemoteAddress()).getHostName() is very expensive. Should cache the result.
                 if (!v.verify(InetSocketAddress.class.cast(channel.getRemoteAddress()).getHostName(),
                         sslHandler.getEngine().getSession())) {
-                    throw new ConnectException("HostnameVerifier exception.");
+                    future.abort(new ConnectException("HostnameVerifier exception."));
+                    return;
                 }
             }
+
             future.setRemoteAddress(InetSocketAddress.class.cast(channel.getRemoteAddress())
                     .getAddress()
                     .getHostAddress());
-            future.provider().writeRequest(f.getChannel(), config, future, nettyRequest);
+            future.provider().writeRequest(f.getChannel(), config, future);
         } else {
             Throwable cause = f.getCause();
 
-            logger.debug("Trying to recover a dead cached channel {} with a retry value of {} ", f.getChannel(), future.canRetry());
-            if (future.canRetry() && cause != null && (NettyAsyncHttpProvider.abortOnDisconnectException(cause)
-                    || ClosedChannelException.class.isAssignableFrom(cause.getClass())
+            boolean canRetry = future.canRetry();
+            logger.debug("Trying to recover a dead cached channel {} with a retry value of {} ", f.getChannel(), canRetry);
+            if (canRetry && cause != null && (NettyAsyncHttpProvider.abortOnDisconnectException(cause)
+                    || cause instanceof ClosedChannelException
                     || future.getState() != NettyResponseFuture.STATE.NEW)) {
 
                 logger.debug("Retrying {} ", nettyRequest);
@@ -150,7 +152,7 @@ final class NettyConnectListener<T> implements ChannelFutureListener {
                 future.setNettyRequest(nettyRequest);
                 future.setRequest(request);
             }
-            return new NettyConnectListener<T>(config, future, nettyRequest);
+            return new NettyConnectListener<T>(config, future);
         }
     }
 }

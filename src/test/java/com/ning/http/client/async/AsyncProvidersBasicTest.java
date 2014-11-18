@@ -53,7 +53,6 @@ import com.ning.http.client.AsyncHttpClientConfig;
 import com.ning.http.client.AsyncHttpClientConfig.Builder;
 import com.ning.http.client.AsyncHttpClientConfigBean;
 import com.ning.http.client.AsyncHttpProviderConfig;
-import com.ning.http.client.Cookie;
 import com.ning.http.client.FluentCaseInsensitiveStringsMap;
 import com.ning.http.client.MaxRedirectException;
 import com.ning.http.client.Part;
@@ -62,6 +61,7 @@ import com.ning.http.client.Request;
 import com.ning.http.client.RequestBuilder;
 import com.ning.http.client.Response;
 import com.ning.http.client.StringPart;
+import com.ning.http.client.cookie.Cookie;
 
 public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
     private static final String UTF_8 = "text/html;charset=UTF-8";
@@ -70,9 +70,9 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
     public void asyncProviderEncodingTest() throws Throwable {
         AsyncHttpClient client = getAsyncHttpClient(null);
         try {
-            Request request = new RequestBuilder("GET").setUrl("http://foo.com/foo.html?q=+%20x").build();
+            Request request = new RequestBuilder("GET").setUrl(getTargetUrl() + "?q=+%20x").build();
             String requestUrl = request.getUrl();
-            Assert.assertEquals(requestUrl, "http://foo.com/foo.html?q=%20%20x");
+            Assert.assertEquals(requestUrl, getTargetUrl() + "?q=%20%20x");
             Future<String> responseFuture = client.executeRequest(request, new AsyncCompletionHandler<String>() {
                 @Override
                 public String onCompleted(Response response) throws Exception {
@@ -87,7 +87,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
 
             });
             String url = responseFuture.get();
-            Assert.assertEquals(url, "http://foo.com/foo.html?q=%20%20x");
+            Assert.assertEquals(url, getTargetUrl() + "?q=%20%20x");
         } finally {
             client.close();
         }
@@ -97,7 +97,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
     public void asyncProviderEncodingTest2() throws Throwable {
         AsyncHttpClient client = getAsyncHttpClient(null);
         try {
-            Request request = new RequestBuilder("GET").setUrl("http://foo.com/foo.html").addQueryParameter("q", "a b").build();
+            Request request = new RequestBuilder("GET").setUrl(getTargetUrl() + "").addQueryParameter("q", "a b").build();
 
             Future<String> responseFuture = client.executeRequest(request, new AsyncCompletionHandler<String>() {
                 @Override
@@ -113,7 +113,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
 
             });
             String url = responseFuture.get();
-            Assert.assertEquals(url, "http://foo.com/foo.html?q=a%20b");
+            Assert.assertEquals(url, getTargetUrl() + "?q=a%20b");
         } finally {
             client.close();
         }
@@ -123,7 +123,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
     public void emptyRequestURI() throws Throwable {
         AsyncHttpClient client = getAsyncHttpClient(null);
         try {
-            Request request = new RequestBuilder("GET").setUrl("http://foo.com").build();
+            Request request = new RequestBuilder("GET").setUrl(getTargetUrl()).build();
 
             Future<String> responseFuture = client.executeRequest(request, new AsyncCompletionHandler<String>() {
                 @Override
@@ -139,7 +139,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
 
             });
             String url = responseFuture.get();
-            Assert.assertEquals(url, "http://foo.com/");
+            Assert.assertEquals(url, getTargetUrl());
         } finally {
             client.close();
         }
@@ -393,14 +393,13 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
         }
     }
 
-    @Test(groups = { "online", "default_provider", "async" })
+    @Test(groups = { "online", "default_provider", "async" }, expectedExceptions = { NullPointerException.class })
     public void asyncNullSchemeTest() throws Throwable {
         AsyncHttpClient client = getAsyncHttpClient(null);
         try {
             client.prepareGet("www.sun.com").execute();
-            Assert.fail();
-        } catch (IllegalArgumentException ex) {
-            Assert.assertTrue(true);
+        } finally {
+            client.close();;
         }
     }
 
@@ -478,7 +477,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
             h.add("Test4", "Test4");
             h.add("Test5", "Test5");
 
-            final Cookie coo = new Cookie("/", "foo", "value", "/", -1, false);
+            final Cookie coo = new Cookie("foo", "value", "value", "/", "/", -1L, -1, false, false);
             client.prepareGet(getTargetUrl()).setHeaders(h).addCookie(coo).execute(new AsyncCompletionHandlerAdapter() {
 
                 @Override
@@ -487,7 +486,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                         assertEquals(response.getStatusCode(), 200);
                         List<Cookie> cookies = response.getCookies();
                         assertEquals(cookies.size(), 1);
-                        assertEquals(cookies.get(0).toString(), coo.toString());
+                        assertEquals(cookies.get(0).toString(), "foo=value");
                     } finally {
                         l.countDown();
                     }
@@ -557,7 +556,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
 
             client.preparePost(getTargetUrl()).setHeaders(h).setBody(sb.toString()).execute(new AsyncCompletionHandlerAdapter() {
 
@@ -600,7 +599,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
             ByteArrayInputStream is = new ByteArrayInputStream(sb.toString().getBytes());
 
             client.preparePost(getTargetUrl()).setHeaders(h).setBody(is).execute(new AsyncCompletionHandlerAdapter() {
@@ -643,7 +642,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
             ByteArrayInputStream is = new ByteArrayInputStream(sb.toString().getBytes());
 
             client.preparePut(getTargetUrl()).setHeaders(h).setBody(is).execute(new AsyncCompletionHandlerAdapter() {
@@ -687,7 +686,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
             byte[] bytes = sb.toString().getBytes();
             h.add("Content-Length", String.valueOf(bytes.length));
 
@@ -769,7 +768,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
 
             client.preparePost(getTargetUrl()).setHeaders(h).setBody(sb.toString()).execute(new AsyncCompletionHandlerAdapter() {
 
@@ -777,7 +776,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 public Response onCompleted(Response response) throws Exception {
                     try {
                         assertEquals(response.getStatusCode(), 200);
-                        assertEquals(response.getHeader("X-Accept-Encoding"), "gzip");
+                        assertEquals(response.getHeader("X-Accept-Encoding"), "gzip,deflate");
                     } finally {
                         l.countDown();
                     }
@@ -807,7 +806,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
 
             Response response = client.preparePost(getTargetUrl()).setHeaders(h).setBody(sb.toString()).execute(new AsyncCompletionHandler<Response>() {
                 @Override
@@ -867,7 +866,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
 
             Response response = client.preparePut(getTargetUrl()).setHeaders(h).setBody(sb.toString()).execute(new AsyncCompletionHandlerAdapter()).get();
 
@@ -892,7 +891,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
 
             client.preparePost(getTargetUrl()).setHeaders(h).setBody(sb.toString()).execute(new AsyncCompletionHandlerAdapter() {
 
@@ -967,7 +966,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
 
                 future.get(10, TimeUnit.SECONDS);
             } catch (ExecutionException ex) {
-                if (ex.getCause() != null && TimeoutException.class.isAssignableFrom(ex.getCause().getClass())) {
+                if (ex.getCause() instanceof TimeoutException) {
                     Assert.assertTrue(true);
                 }
             } catch (TimeoutException te) {
@@ -994,7 +993,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
 
             Future<Response> future = client.preparePost(getTargetUrl()).setHeaders(h).setBody(sb.toString()).execute(new AsyncCompletionHandlerAdapter());
 
@@ -1020,7 +1019,7 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
                 sb.append(i);
                 sb.append("&");
             }
-            sb.deleteCharAt(sb.length() - 1);
+            sb.setLength(sb.length() - 1);
 
             final CountDownLatch l = new CountDownLatch(1);
 
@@ -1650,29 +1649,15 @@ public abstract class AsyncProvidersBasicTest extends AbstractBasicTest {
         }
     }
 
-    @Test(groups = { "standalone", "default_provider" }, expectedExceptions = IllegalArgumentException.class)
-    public void headShouldNotAllowBody() throws IllegalArgumentException, IOException {
-        AsyncHttpClient client = getAsyncHttpClient(null);
-        try {
-            AsyncHttpClient.BoundRequestBuilder builder = client.prepareHead(getTargetUrl());
-            builder.setBody("Boo!");
-            builder.execute();
-        } finally {
-            client.close();
-        }
-    }
-
     protected String getBrokenTargetUrl() {
         return String.format("http:127.0.0.1:%d/foo/test", port1);
     }
 
-    @Test(groups = { "standalone", "default_provider" })
+    @Test(groups = { "standalone", "default_provider" }, expectedExceptions = { NullPointerException.class })
     public void invalidUri() throws Exception {
         AsyncHttpClient client = getAsyncHttpClient(null);
         try {
-            AsyncHttpClient.BoundRequestBuilder builder = client.prepareGet(getBrokenTargetUrl());
-            Response r = client.executeRequest(builder.build()).get();
-            assertEquals(200, r.getStatusCode());
+            client.prepareGet(getBrokenTargetUrl());
         } finally {
             client.close();
         }

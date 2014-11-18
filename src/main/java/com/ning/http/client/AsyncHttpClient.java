@@ -16,24 +16,27 @@
  */
 package com.ning.http.client;
 
-import com.ning.http.client.Request.EntityWriter;
-import com.ning.http.client.filter.FilterContext;
-import com.ning.http.client.filter.FilterException;
-import com.ning.http.client.filter.RequestFilter;
-import com.ning.http.client.providers.jdk.JDKAsyncHttpProvider;
-import com.ning.http.client.resumable.ResumableAsyncHandler;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.InvocationTargetException;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.ning.http.client.Request.EntityWriter;
+import com.ning.http.client.cookie.Cookie;
+import com.ning.http.client.filter.FilterContext;
+import com.ning.http.client.filter.FilterException;
+import com.ning.http.client.filter.RequestFilter;
+import com.ning.http.client.providers.jdk.JDKAsyncHttpProvider;
+import com.ning.http.client.resumable.ResumableAsyncHandler;
 
 /**
  * This class support asynchronous and synchronous HTTP request.
@@ -209,17 +212,6 @@ public class AsyncHttpClient implements Closeable {
     }
 
     public class BoundRequestBuilder extends RequestBuilderBase<BoundRequestBuilder> {
-        /**
-         * Calculator used for calculating request signature for the request being
-         * built, if any.
-         */
-        protected SignatureCalculator signatureCalculator;
-
-        /**
-         * URL used as the base, not including possibly query parameters. Needed for
-         * signature calculation
-         */
-        protected String baseURL;
 
         private BoundRequestBuilder(String reqType, boolean useRawUrl) {
             super(BoundRequestBuilder.class, reqType, useRawUrl);
@@ -242,7 +234,7 @@ public class AsyncHttpClient implements Closeable {
         //       access these methods - see Clojure tickets 126 and 259
 
         @Override
-        public BoundRequestBuilder addBodyPart(Part part) throws IllegalArgumentException {
+        public BoundRequestBuilder addBodyPart(Part part) {
             return super.addBodyPart(part);
         }
 
@@ -257,7 +249,7 @@ public class AsyncHttpClient implements Closeable {
         }
 
         @Override
-        public BoundRequestBuilder addParameter(String key, String value) throws IllegalArgumentException {
+        public BoundRequestBuilder addParameter(String key, String value) {
             return super.addParameter(key, value);
         }
 
@@ -268,28 +260,16 @@ public class AsyncHttpClient implements Closeable {
 
         @Override
         public Request build() {
-            /* Let's first calculate and inject signature, before finalizing actual build
-             * (order does not matter with current implementation but may in future)
-             */
-            if (signatureCalculator != null) {
-                String url = baseURL;
-                // Should not include query parameters, ensure:
-                int i = url.indexOf('?');
-                if (i >= 0) {
-                    url = url.substring(0, i);
-                }
-                signatureCalculator.calculateAndAddSignature(url, request, this);
-            }
             return super.build();
         }
 
         @Override
-        public BoundRequestBuilder setBody(byte[] data) throws IllegalArgumentException {
+        public BoundRequestBuilder setBody(byte[] data) {
             return super.setBody(data);
         }
 
         @Override
-        public BoundRequestBuilder setBody(EntityWriter dataWriter, long length) throws IllegalArgumentException {
+        public BoundRequestBuilder setBody(EntityWriter dataWriter, long length) {
             return super.setBody(dataWriter, length);
         }
 
@@ -299,12 +279,12 @@ public class AsyncHttpClient implements Closeable {
         }
 
         @Override
-        public BoundRequestBuilder setBody(InputStream stream) throws IllegalArgumentException {
+        public BoundRequestBuilder setBody(InputStream stream) {
             return super.setBody(stream);
         }
 
         @Override
-        public BoundRequestBuilder setBody(String data) throws IllegalArgumentException {
+        public BoundRequestBuilder setBody(String data) {
             return super.setBody(data);
         }
 
@@ -324,18 +304,17 @@ public class AsyncHttpClient implements Closeable {
         }
 
         @Override
-        public BoundRequestBuilder setParameters(Map<String, Collection<String>> parameters) throws IllegalArgumentException {
+        public BoundRequestBuilder setParameters(Map<String, Collection<String>> parameters) {
             return super.setParameters(parameters);
         }
 
         @Override
-        public BoundRequestBuilder setParameters(FluentStringsMap parameters) throws IllegalArgumentException {
+        public BoundRequestBuilder setParameters(FluentStringsMap parameters) {
             return super.setParameters(parameters);
         }
 
         @Override
         public BoundRequestBuilder setUrl(String url) {
-            baseURL = url;
             return super.setUrl(url);
         }
 
@@ -345,8 +324,7 @@ public class AsyncHttpClient implements Closeable {
         }
 
         public BoundRequestBuilder setSignatureCalculator(SignatureCalculator signatureCalculator) {
-            this.signatureCalculator = signatureCalculator;
-            return this;
+            return super.setSignatureCalculator(signatureCalculator);
         }
     }
 
@@ -364,8 +342,9 @@ public class AsyncHttpClient implements Closeable {
      * Close the underlying connections.
      */
     public void close() {
-        httpProvider.close();
-        isClosed.set(true);
+        if (isClosed.compareAndSet(false, true)) {
+            httpProvider.close();
+        }
     }
 
     /**
@@ -554,7 +533,7 @@ public class AsyncHttpClient implements Closeable {
         }
 
         Request request = fc.getRequest();
-        if (ResumableAsyncHandler.class.isAssignableFrom(fc.getAsyncHandler().getClass())) {
+        if (fc.getAsyncHandler() instanceof ResumableAsyncHandler) {
             request = ResumableAsyncHandler.class.cast(fc.getAsyncHandler()).adjustRequestRange(request);
         }
 
@@ -576,6 +555,16 @@ public class AsyncHttpClient implements Closeable {
                     new Class[]{AsyncHttpClientConfig.class}).newInstance(new Object[]{config});
         } catch (Throwable t) {
 
+            if (t instanceof InvocationTargetException) {
+                final InvocationTargetException ite = (InvocationTargetException) t;
+                if (logger.isErrorEnabled()) {
+                    logger.error(
+                            "Unable to instantiate provider {}.  Trying other providers.",
+                            className);
+                    logger.error(ite.getCause().toString(), ite.getCause());
+                }
+            }
+        	
             // Let's try with another classloader
             try {
                 Class<AsyncHttpProvider> providerClass = (Class<AsyncHttpProvider>)

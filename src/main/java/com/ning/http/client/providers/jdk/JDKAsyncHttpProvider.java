@@ -12,45 +12,9 @@
  */
 package com.ning.http.client.providers.jdk;
 
+import static com.ning.http.util.AsyncHttpProviderUtils.DEFAULT_CHARSET;
 import static com.ning.http.util.MiscUtil.isNonEmpty;
 
-import com.ning.http.client.AsyncHandler;
-import com.ning.http.client.AsyncHttpClientConfig;
-import com.ning.http.client.AsyncHttpProvider;
-import com.ning.http.client.AsyncHttpProviderConfig;
-import com.ning.http.client.Body;
-import com.ning.http.client.FluentCaseInsensitiveStringsMap;
-import com.ning.http.client.HttpResponseBodyPart;
-import com.ning.http.client.HttpResponseHeaders;
-import com.ning.http.client.HttpResponseStatus;
-import com.ning.http.client.ListenableFuture;
-import com.ning.http.client.MaxRedirectException;
-import com.ning.http.client.PerRequestConfig;
-import com.ning.http.client.ProgressAsyncHandler;
-import com.ning.http.client.ProxyServer;
-import com.ning.http.client.Realm;
-import com.ning.http.client.Request;
-import com.ning.http.client.RequestBuilder;
-import com.ning.http.client.Response;
-import com.ning.http.client.filter.FilterContext;
-import com.ning.http.client.filter.FilterException;
-import com.ning.http.client.filter.IOExceptionFilter;
-import com.ning.http.client.filter.ResponseFilter;
-import com.ning.http.client.listener.TransferCompletionHandler;
-import com.ning.http.multipart.MultipartRequestEntity;
-import com.ning.http.util.AsyncHttpProviderUtils;
-import com.ning.http.util.AuthenticatorUtils;
-import com.ning.http.util.ProxyUtils;
-import com.ning.http.util.SslUtils;
-import com.ning.http.util.UTF8UrlEncoder;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.naming.AuthenticationException;
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLHandshakeException;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -79,7 +43,44 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
 
-import static com.ning.http.util.AsyncHttpProviderUtils.DEFAULT_CHARSET;
+import javax.naming.AuthenticationException;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLHandshakeException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.ning.http.client.AsyncHandler;
+import com.ning.http.client.AsyncHttpClientConfig;
+import com.ning.http.client.AsyncHttpProvider;
+import com.ning.http.client.AsyncHttpProviderConfig;
+import com.ning.http.client.Body;
+import com.ning.http.client.FluentCaseInsensitiveStringsMap;
+import com.ning.http.client.HttpResponseBodyPart;
+import com.ning.http.client.HttpResponseHeaders;
+import com.ning.http.client.HttpResponseStatus;
+import com.ning.http.client.ListenableFuture;
+import com.ning.http.client.MaxRedirectException;
+import com.ning.http.client.PerRequestConfig;
+import com.ning.http.client.ProgressAsyncHandler;
+import com.ning.http.client.ProxyServer;
+import com.ning.http.client.Realm;
+import com.ning.http.client.Request;
+import com.ning.http.client.RequestBuilder;
+import com.ning.http.client.Response;
+import com.ning.http.client.cookie.CookieEncoder;
+import com.ning.http.client.filter.FilterContext;
+import com.ning.http.client.filter.FilterException;
+import com.ning.http.client.filter.IOExceptionFilter;
+import com.ning.http.client.filter.ResponseFilter;
+import com.ning.http.client.listener.TransferCompletionHandler;
+import com.ning.http.multipart.MultipartRequestEntity;
+import com.ning.http.util.AsyncHttpProviderUtils;
+import com.ning.http.util.AuthenticatorUtils;
+import com.ning.http.util.ProxyUtils;
+import com.ning.http.util.SslUtils;
+import com.ning.http.util.UTF8UrlEncoder;
 
 public class JDKAsyncHttpProvider implements AsyncHttpProvider {
     private final static Logger logger = LoggerFactory.getLogger(JDKAsyncHttpProvider.class);
@@ -104,7 +105,7 @@ public class JDKAsyncHttpProvider implements AsyncHttpProvider {
 
         this.config = config;
         AsyncHttpProviderConfig<?, ?> providerConfig = config.getAsyncHttpProviderConfig();
-        if (providerConfig != null && JDKAsyncHttpProviderConfig.class.isAssignableFrom(providerConfig.getClass())) {
+        if (providerConfig instanceof JDKAsyncHttpProviderConfig) {
             configure(JDKAsyncHttpProviderConfig.class.cast(providerConfig));
         }
     }
@@ -175,12 +176,8 @@ public class JDKAsyncHttpProvider implements AsyncHttpProvider {
             }
         }
 
-        HttpURLConnection urlConnection = null;
-        if (proxy == null) {
-            urlConnection = (HttpURLConnection) request.getURI().toURL().openConnection(Proxy.NO_PROXY);
-        } else {
-            urlConnection = (HttpURLConnection) proxyServer.getURI().toURL().openConnection(proxy);
-        }
+        HttpURLConnection urlConnection = (HttpURLConnection)
+            request.getURI().toURL().openConnection(proxy == null ? Proxy.NO_PROXY : proxy);
 
         if (request.getUrl().startsWith("https")) {
             HttpsURLConnection secure = (HttpsURLConnection) urlConnection;
@@ -234,15 +231,15 @@ public class JDKAsyncHttpProvider implements AsyncHttpProvider {
                 URI uri = null;
                 // Encoding with URLConnection is a bit bogus so we need to try both way before setting it
                 try {
-                    uri = AsyncHttpProviderUtils.createUri(request.getRawUrl());
+                    uri = AsyncHttpProviderUtils.createNonEmptyPathURI(request.getRawUrl());
                 } catch (IllegalArgumentException u) {
-                    uri = AsyncHttpProviderUtils.createUri(request.getUrl());
+                    uri = AsyncHttpProviderUtils.createNonEmptyPathURI(request.getUrl());
                 }
 
                 configure(uri, urlConnection, request);
                 urlConnection.connect();
 
-                if (TransferCompletionHandler.class.isAssignableFrom(asyncHandler.getClass())) {
+                if (asyncHandler instanceof TransferCompletionHandler) {
                     throw new IllegalStateException(TransferCompletionHandler.class.getName() + "not supported by this provider");
                 }
 
@@ -357,14 +354,15 @@ public class JDKAsyncHttpProvider implements AsyncHttpProvider {
                     }
                 }
 
-                if (ProgressAsyncHandler.class.isAssignableFrom(asyncHandler.getClass())) {
-                    ProgressAsyncHandler.class.cast(asyncHandler).onHeaderWriteCompleted();
-                    ProgressAsyncHandler.class.cast(asyncHandler).onContentWriteCompleted();
+                if (asyncHandler instanceof ProgressAsyncHandler) {
+                	ProgressAsyncHandler progressAsyncHandler = (ProgressAsyncHandler) asyncHandler;
+                	progressAsyncHandler.onHeaderWriteCompleted();
+                	progressAsyncHandler.onContentWriteCompleted();
                 }
                 try {
                     T t = asyncHandler.onCompleted();
                     future.content(t);
-                    future.done(null);
+                    future.done();
                     return t;
                 } catch (Throwable t) {
                     RuntimeException ex = new RuntimeException();
@@ -374,7 +372,7 @@ public class JDKAsyncHttpProvider implements AsyncHttpProvider {
             } catch (Throwable t) {
                 logger.debug(t.getMessage(), t);
 
-                if (IOException.class.isAssignableFrom(t.getClass()) && config.getIOExceptionFilters().size() > 0) {
+                if (t instanceof IOException && !config.getIOExceptionFilters().isEmpty()) {
                     FilterContext fc = new FilterContext.FilterContextBuilder().asyncHandler(asyncHandler)
                             .request(request).ioException(IOException.class.cast(t)).build();
 
@@ -384,7 +382,7 @@ public class JDKAsyncHttpProvider implements AsyncHttpProvider {
                         if (config.getMaxTotalConnections() != -1) {
                             maxConnections.decrementAndGet();
                         }
-                        future.done(null);
+                        future.done();
                     }
 
                     if (fc.replayRequest()) {
@@ -425,20 +423,18 @@ public class JDKAsyncHttpProvider implements AsyncHttpProvider {
         }
 
         private Throwable filterException(Throwable t) {
-            if (UnknownHostException.class.isAssignableFrom(t.getClass())) {
+            if (t instanceof UnknownHostException) {
                 t = new ConnectException(t.getMessage());
-            }
 
-            if (SocketTimeoutException.class.isAssignableFrom(t.getClass())) {
+            } else if (t instanceof SocketTimeoutException) {
                 int responseTimeoutInMs = config.getRequestTimeoutInMs();
 
                 if (request.getPerRequestConfig() != null && request.getPerRequestConfig().getRequestTimeoutInMs() != -1) {
                     responseTimeoutInMs = request.getPerRequestConfig().getRequestTimeoutInMs();
                 }
                 t = new TimeoutException(String.format("No response received after %s", responseTimeoutInMs));
-            }
 
-            if (SSLHandshakeException.class.isAssignableFrom(t.getClass())) {
+            } else if (t instanceof SSLHandshakeException) {
                 Throwable t2 = new ConnectException();
                 t2.initCause(t);
                 t = t2;
@@ -552,7 +548,7 @@ public class JDKAsyncHttpProvider implements AsyncHttpProvider {
             }
 
             if (isNonEmpty(request.getCookies())) {
-                urlConnection.setRequestProperty("Cookie", AsyncHttpProviderUtils.encodeCookies(request.getCookies()));
+                urlConnection.setRequestProperty("Cookie", CookieEncoder.encode(request.getCookies()));
             }
 
             String reqType = request.getMethod();

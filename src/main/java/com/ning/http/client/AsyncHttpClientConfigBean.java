@@ -12,6 +12,8 @@
  */
 package com.ning.http.client;
 
+import static com.ning.http.client.AsyncHttpClientConfigDefaults.*;
+
 import com.ning.http.client.filter.IOExceptionFilter;
 import com.ning.http.client.filter.RequestFilter;
 import com.ning.http.client.filter.ResponseFilter;
@@ -19,11 +21,10 @@ import com.ning.http.util.ProxyUtils;
 
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSession;
+
 import java.util.LinkedList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 
 /**
@@ -44,44 +45,37 @@ public class AsyncHttpClientConfigBean extends AsyncHttpClientConfig {
     }
 
     void configureDefaults() {
-        maxTotalConnections = Integer.getInteger(ASYNC_CLIENT + "defaultMaxTotalConnections", -1);
-        maxConnectionPerHost = Integer.getInteger(ASYNC_CLIENT + "defaultMaxConnectionsPerHost", -1);
-        connectionTimeOutInMs = Integer.getInteger(ASYNC_CLIENT + "defaultConnectionTimeoutInMS", 60 * 1000);
-        idleConnectionInPoolTimeoutInMs = Integer.getInteger(ASYNC_CLIENT + "defaultIdleConnectionInPoolTimeoutInMS", 60 * 1000);
-        idleConnectionTimeoutInMs = Integer.getInteger(ASYNC_CLIENT + "defaultIdleConnectionTimeoutInMS", 60 * 1000);
-        requestTimeoutInMs = Integer.getInteger(ASYNC_CLIENT + "defaultRequestTimeoutInMS", 60 * 1000);
-        redirectEnabled = Boolean.getBoolean(ASYNC_CLIENT + "defaultRedirectsEnabled");
-        maxDefaultRedirects = Integer.getInteger(ASYNC_CLIENT + "defaultMaxRedirects", 5);
-        compressionEnabled = Boolean.getBoolean(ASYNC_CLIENT + "compressionEnabled");
-        userAgent = System.getProperty(ASYNC_CLIENT + "userAgent", "NING/1.0");
+        maxTotalConnections = defaultMaxTotalConnections();
+        maxConnectionPerHost = defaultMaxConnectionPerHost();
+        connectionTimeOutInMs = defaultConnectionTimeOutInMs();
+        webSocketIdleTimeoutInMs = defaultWebSocketIdleTimeoutInMs();
+        idleConnectionInPoolTimeoutInMs = defaultIdleConnectionInPoolTimeoutInMs();
+        idleConnectionTimeoutInMs = defaultIdleConnectionTimeoutInMs();
+        requestTimeoutInMs = defaultRequestTimeoutInMs();
+        maxConnectionLifeTimeInMs = defaultMaxConnectionLifeTimeInMs();
+        redirectEnabled = defaultRedirectEnabled();
+        maxRedirects = defaultMaxRedirects();
+        compressionEnabled = defaultCompressionEnabled();
+        userAgent = defaultUserAgent();
+        allowPoolingConnection = defaultAllowPoolingConnection();
+        useRelativeURIsWithConnectProxies = defaultUseRelativeURIsWithConnectProxies();
+        requestCompressionLevel = defaultRequestCompressionLevel();
+        maxRequestRetry = defaultMaxRequestRetry();
+        ioThreadMultiplier = defaultIoThreadMultiplier();
+        allowSslConnectionPool = defaultAllowSslConnectionPool();
+        useRawUrl = defaultUseRawUrl();
+        removeQueryParamOnRedirect = defaultRemoveQueryParamOnRedirect();
+        strict302Handling = defaultStrict302Handling();
+        hostnameVerifier = defaultHostnameVerifier();
 
-        boolean useProxyProperties = Boolean.getBoolean(ASYNC_CLIENT + "useProxyProperties");
-        if (useProxyProperties) {
-            proxyServer = ProxyUtils.createProxy(System.getProperties());
+        if (defaultUseProxySelector()) {
+            proxyServerSelector = ProxyUtils.getJdkDefaultProxyServerSelector();
+        } else if (defaultUseProxyProperties()) {
+            proxyServerSelector = ProxyUtils.createProxyServerSelector(System.getProperties());
         }
-
-        allowPoolingConnection = true;
-        requestCompressionLevel = -1;
-        maxRequestRetry = 5;
-        allowSslConnectionPool = true;
-        useRawUrl = false;
-        removeQueryParamOnRedirect = true;
-        hostnameVerifier = new HostnameVerifier() {
-
-            public boolean verify(String s, SSLSession sslSession) {
-                return true;
-            }
-        };
     }
 
     void configureExecutors() {
-        reaper = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors(), new ThreadFactory() {
-            public Thread newThread(Runnable r) {
-                Thread t = new Thread(r, "AsyncHttpClient-Reaper");
-                t.setDaemon(true);
-                return t;
-            }
-        });
         applicationThreadPool = Executors.newCachedThreadPool(new ThreadFactory() {
             public Thread newThread(Runnable r) {
                 Thread t = new Thread(r, "AsyncHttpClient-Callback");
@@ -111,6 +105,11 @@ public class AsyncHttpClientConfigBean extends AsyncHttpClientConfig {
         return this;
     }
 
+    public AsyncHttpClientConfigBean setStrict302Handling(boolean strict302Handling) {
+        this.strict302Handling = strict302Handling;
+        return this;
+    }
+
     public AsyncHttpClientConfigBean setIdleConnectionTimeoutInMs(int idleConnectionTimeoutInMs) {
         this.idleConnectionTimeoutInMs = idleConnectionTimeoutInMs;
         return this;
@@ -121,13 +120,18 @@ public class AsyncHttpClientConfigBean extends AsyncHttpClientConfig {
         return this;
     }
 
+    public AsyncHttpClientConfigBean setMaxConnectionLifeTimeInMs(int maxConnectionLifeTimeInMs) {
+        this.maxConnectionLifeTimeInMs = maxConnectionLifeTimeInMs;
+        return this;
+    }
+
     public AsyncHttpClientConfigBean setRedirectEnabled(boolean redirectEnabled) {
         this.redirectEnabled = redirectEnabled;
         return this;
     }
 
-    public AsyncHttpClientConfigBean setMaxDefaultRedirects(int maxDefaultRedirects) {
-        this.maxDefaultRedirects = maxDefaultRedirects;
+    public AsyncHttpClientConfigBean setMaxRedirects(int maxRedirects) {
+        this.maxRedirects = maxRedirects;
         return this;
     }
 
@@ -146,14 +150,6 @@ public class AsyncHttpClientConfigBean extends AsyncHttpClientConfig {
         return this;
     }
 
-    public AsyncHttpClientConfigBean setReaper(ScheduledExecutorService reaper) {
-        if (this.reaper != null) {
-            this.reaper.shutdownNow();
-        }
-        this.reaper = reaper;
-        return this;
-    }
-
     public AsyncHttpClientConfigBean setApplicationThreadPool(ExecutorService applicationThreadPool) {
         if (this.applicationThreadPool != null) {
             this.applicationThreadPool.shutdownNow();
@@ -163,7 +159,12 @@ public class AsyncHttpClientConfigBean extends AsyncHttpClientConfig {
     }
 
     public AsyncHttpClientConfigBean setProxyServer(ProxyServer proxyServer) {
-        this.proxyServer = proxyServer;
+        this.proxyServerSelector = ProxyUtils.createProxyServerSelector(proxyServer);
+        return this;
+    }
+
+    public AsyncHttpClientConfigBean setProxyServerSelector(ProxyServerSelector proxyServerSelector) {
+        this.proxyServerSelector = proxyServerSelector;
         return this;
     }
 

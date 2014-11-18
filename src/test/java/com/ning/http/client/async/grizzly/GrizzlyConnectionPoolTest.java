@@ -15,17 +15,16 @@ package com.ning.http.client.async.grizzly;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertNull;
 import static org.testng.Assert.fail;
 
+import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
-import org.glassfish.grizzly.Connection;
+import com.ning.http.client.ListenableFuture;
 import org.testng.annotations.Test;
 
 import com.ning.http.client.AsyncHttpClient;
 import com.ning.http.client.AsyncHttpClientConfig;
-import com.ning.http.client.ConnectionsPool;
 import com.ning.http.client.Response;
 import com.ning.http.client.async.ConnectionPoolTest;
 import com.ning.http.client.async.ProviderUtil;
@@ -43,105 +42,21 @@ public class GrizzlyConnectionPoolTest extends ConnectionPoolTest {
         AsyncHttpClient client = getAsyncHttpClient(new AsyncHttpClientConfig.Builder().setAllowPoolingConnection(true).setMaximumConnectionsTotal(1).build());
         try {
             String url = getTargetUrl();
-            int i;
-            Exception exception = null;
-            for (i = 0; i < 20; i++) {
-                try {
-                    log.info("{} requesting url [{}]...", i, url);
-
-                    if (i < 5) {
-                        client.prepareGet(url).execute().get();
-                    } else {
-                        client.prepareGet(url).execute();
-                    }
-                } catch (Exception ex) {
-                    exception = ex;
-                    break;
-                }
-            }
-            assertNotNull(exception);
-            assertNotNull(exception.getMessage());
-        } finally {
-            client.close();
-        }
-    }
-
-    @Override
-    public void testValidConnectionsPool() {
-        ConnectionsPool<String, Connection> cp = new ConnectionsPool<String, Connection>() {
-
-            public boolean offer(String key, Connection connection) {
-                return true;
-            }
-
-            public Connection poll(String connection) {
-                return null;
-            }
-
-            public boolean removeAll(Connection connection) {
-                return false;
-            }
-
-            public boolean canCacheConnection() {
-                return true;
-            }
-
-            public void destroy() {
-
-            }
-        };
-
-        AsyncHttpClient client = getAsyncHttpClient(new AsyncHttpClientConfig.Builder().setConnectionsPool(cp).build());
-        try {
-            Exception exception = null;
+            ListenableFuture lockRequest = null;
             try {
-                client.prepareGet(getTargetUrl()).execute().get(TIMEOUT, TimeUnit.SECONDS);
-            } catch (Exception ex) {
-                ex.printStackTrace();
-                exception = ex;
+                lockRequest = client.prepareGet(url).addHeader("LockThread", "true").execute();
+            } catch (Exception e) {
+                fail("Unexpected exception thrown.", e);
             }
-            assertNull(exception);
-        } finally {
-            client.close();
-        }
-    }
-
-    @Test(groups = { "standalone", "default_provider" })
-    public void testInvalidConnectionsPool() {
-
-        ConnectionsPool<String, Connection> cp = new ConnectionsPool<String, Connection>() {
-
-            public boolean offer(String key, Connection connection) {
-                return false;
-            }
-
-            public Connection poll(String connection) {
-                return null;
-            }
-
-            public boolean removeAll(Connection connection) {
-                return false;
-            }
-
-            public boolean canCacheConnection() {
-                return false;
-            }
-
-            public void destroy() {
-
-            }
-        };
-
-        AsyncHttpClient client = getAsyncHttpClient(new AsyncHttpClientConfig.Builder().setConnectionsPool(cp).build());
-        try {
-            Exception exception = null;
             try {
-                client.prepareGet(getTargetUrl()).execute().get(TIMEOUT, TimeUnit.SECONDS);
-            } catch (Exception ex) {
-                ex.printStackTrace();
-                exception = ex;
+                client.prepareConnect(url).execute().get();
+            } catch (IOException ioe) {
+                assertNotNull(ioe);
+                assertEquals("Max connections exceeded", ioe.getMessage());
+            } catch (Exception e) {
+                fail("Unexpected exception thrown.", e);
             }
-            assertNotNull(exception);
+            lockRequest.cancel(true);
         } finally {
             client.close();
         }

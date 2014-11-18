@@ -12,6 +12,8 @@
  */
 package com.ning.http.util;
 
+import static com.ning.http.util.MiscUtil.isNonEmpty;
+
 import java.io.ByteArrayInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -19,28 +21,21 @@ import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.text.ParsePosition;
-import java.text.SimpleDateFormat;
-import java.util.Collection;
-import java.util.Date;
 import java.util.List;
-import java.util.Locale;
 
 import com.ning.http.client.AsyncHttpClientConfig;
 import com.ning.http.client.AsyncHttpProvider;
 import com.ning.http.client.ByteArrayPart;
-import com.ning.http.client.Cookie;
 import com.ning.http.client.FilePart;
 import com.ning.http.client.FluentCaseInsensitiveStringsMap;
-import com.ning.http.client.FluentStringsMap;
 import com.ning.http.client.HttpResponseBodyPart;
 import com.ning.http.client.HttpResponseBodyPartsInputStream;
 import com.ning.http.client.Part;
+import com.ning.http.client.Request;
 import com.ning.http.client.StringPart;
 import com.ning.http.multipart.ByteArrayPartSource;
 import com.ning.http.multipart.MultipartRequestEntity;
 import com.ning.http.multipart.PartSource;
-import com.ning.org.jboss.netty.handler.codec.http.CookieDecoder;
 
 /**
  * {@link com.ning.http.client.AsyncHttpProvider} common utilities.
@@ -50,95 +45,6 @@ import com.ning.org.jboss.netty.handler.codec.http.CookieDecoder;
 public class AsyncHttpProviderUtils {
 
     public final static String DEFAULT_CHARSET = "ISO-8859-1";
-
-    private final static String BODY_NOT_COMPUTED = "Response's body hasn't been computed by your AsyncHandler.";
-
-
-    protected final static ThreadLocal<SimpleDateFormat[]> simpleDateFormat = new ThreadLocal<SimpleDateFormat[]>() {
-        protected SimpleDateFormat[] initialValue() {
-
-            return new SimpleDateFormat[]
-                    {
-                            new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US), // RFC1123
-                            new SimpleDateFormat("EEEE, dd-MMM-yy HH:mm:ss zzz", Locale.US), //RFC1036
-                            new SimpleDateFormat("EEE MMM d HH:mm:ss yyyy", Locale.US),  //ASCTIME
-                            new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.US),
-                            new SimpleDateFormat("EEE, dd-MMM-yyyy HH:mm:ss z", Locale.US),
-                            new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.US),
-                            new SimpleDateFormat("EEE, dd-MMM-yyyy HH:mm:ss Z", Locale.US)
-                    };
-        }
-    };
-
-    public final static SimpleDateFormat[] get() {
-        return simpleDateFormat.get();
-    }
-
-
-    //space ' '
-    static final byte SP = 32;
-
-    //tab ' '
-    static final byte HT = 9;
-
-    /**
-     * Carriage return
-     */
-    static final byte CR = 13;
-
-    /**
-     * Equals '='
-     */
-    static final byte EQUALS = 61;
-
-    /**
-     * Line feed character
-     */
-    static final byte LF = 10;
-
-    /**
-     * carriage return line feed
-     */
-    static final byte[] CRLF = new byte[]{CR, LF};
-
-    /**
-     * Colon ':'
-     */
-    static final byte COLON = 58;
-
-    /**
-     * Semicolon ';'
-     */
-    static final byte SEMICOLON = 59;
-
-    /**
-     * comma ','
-     */
-    static final byte COMMA = 44;
-
-    static final byte DOUBLE_QUOTE = '"';
-
-    static final String PATH = "Path";
-
-    static final String EXPIRES = "Expires";
-
-    static final String MAX_AGE = "Max-Age";
-
-    static final String DOMAIN = "Domain";
-
-    static final String SECURE = "Secure";
-
-    static final String HTTPONLY = "HTTPOnly";
-
-    static final String COMMENT = "Comment";
-
-    static final String COMMENTURL = "CommentURL";
-
-    static final String DISCARD = "Discard";
-
-    static final String PORT = "Port";
-
-    static final String VERSION = "Version";
 
     static final byte[] EMPTY_BYTE_ARRAY = "".getBytes();
     
@@ -151,36 +57,24 @@ public class AsyncHttpProviderUtils {
         }
     }
 
-    public final static URI createUri(String u) {
+    public final static URI createNonEmptyPathURI(String u) {
         URI uri = URI.create(u);
         validateSupportedScheme(uri);
 
         String path = uri.getPath();
         if (path == null) {
-            throw new IllegalArgumentException("The URI path, of the URI " + uri
-                    + ", must be non-null");
-        } else if (path.length() > 0 && path.charAt(0) != '/') {
-            throw new IllegalArgumentException("The URI path, of the URI " + uri
-                    + ". must start with a '/'");
-        } else if (path.length() == 0) {
+            throw new IllegalArgumentException("The URI path, of the URI " + uri  + ", must be non-null");
+        } else if (isNonEmpty(path) && path.charAt(0) != '/') {
+            throw new IllegalArgumentException("The URI path, of the URI " + uri  + ". must start with a '/'");
+        } else if (!isNonEmpty(path)) {
             return URI.create(u + "/");
         }
 
         return uri;
     }
 
-    public static String getBaseUrl(String url) {
-        return getBaseUrl(createUri(url));
-    }
-
     public final static String getBaseUrl(URI uri) {
-        String url = uri.getScheme() + "://" + uri.getAuthority();
-        int port = uri.getPort();
-        if (port == -1) {
-            port = getPort(uri);
-            url += ":" + port;
-        }
-        return url;
+        return uri.getScheme() + "://" + getAuthority(uri);
     }
 
     public final static String getAuthority(URI uri) {
@@ -274,7 +168,7 @@ public class AsyncHttpProviderUtils {
                         + ", must be equal (ignoring case) to 'ws, 'wss', 'http', or 'https'");
             }
 
-            return redirectUri;
+            return redirectUri.normalize();
         }
 
     public final static int getPort(URI uri) {
@@ -299,25 +193,23 @@ public class AsyncHttpProviderUtils {
         for (Part part : params) {
             if (part instanceof com.ning.http.multipart.Part) {
                 parts[i] = (com.ning.http.multipart.Part) part;
+
             } else if (part instanceof StringPart) {
-                parts[i] = new com.ning.http.multipart.StringPart(part.getName(),
-                        ((StringPart) part).getValue(),
-                        ((StringPart) part).getCharset());
+                StringPart stringPart = (StringPart) part;
+                parts[i] = new com.ning.http.multipart.StringPart(part.getName(), stringPart.getValue(), stringPart.getCharset());
+
             } else if (part instanceof FilePart) {
-                parts[i] = new com.ning.http.multipart.FilePart(part.getName(),
-                        ((FilePart) part).getFile(),
-                        ((FilePart) part).getMimeType(),
-                        ((FilePart) part).getCharSet());
+                FilePart filePart = (FilePart) part;
+                parts[i] = new com.ning.http.multipart.FilePart(part.getName(), filePart.getFile(), filePart.getMimeType(), filePart.getCharSet());
 
             } else if (part instanceof ByteArrayPart) {
-                PartSource source = new ByteArrayPartSource(((ByteArrayPart) part).getFileName(), ((ByteArrayPart) part).getData());
-                parts[i] = new com.ning.http.multipart.FilePart(part.getName(),
-                        source,
-                        ((ByteArrayPart) part).getMimeType(),
-                        ((ByteArrayPart) part).getCharSet());
+                ByteArrayPart byteArrayPart = (ByteArrayPart) part;
+                PartSource source = new ByteArrayPartSource(byteArrayPart.getFileName(), byteArrayPart.getData());
+                parts[i] = new com.ning.http.multipart.FilePart(part.getName(), source, byteArrayPart.getMimeType(), byteArrayPart.getCharSet());
 
             } else if (part == null) {
                 throw new NullPointerException("Part cannot be null");
+ 
             } else {
                 throw new IllegalArgumentException(String.format("Unsupported part type for multipart parameter %s",
                         part.getName()));
@@ -354,109 +246,8 @@ public class AsyncHttpProviderUtils {
         return b2;
     }
 
-    public static String encodeCookies(Collection<Cookie> cookies) {
-        StringBuilder sb = new StringBuilder();
-
-        for (Cookie cookie : cookies) {
-            if (cookie.getVersion() >= 1) {
-                add(sb, '$' + VERSION, 1);
-            }
-
-            add(sb, cookie.getName(), cookie.getValue());
-
-            if (cookie.getPath() != null) {
-                add(sb, '$' + PATH, cookie.getPath());
-            }
-
-            if (cookie.getDomain() != null) {
-                add(sb, '$' + DOMAIN, cookie.getDomain());
-            }
-
-            if (cookie.getVersion() >= 1) {
-                if (!cookie.getPorts().isEmpty()) {
-                    sb.append('$');
-                    sb.append(PORT);
-                    sb.append((char) EQUALS);
-                    sb.append((char) DOUBLE_QUOTE);
-                    for (int port : cookie.getPorts()) {
-                        sb.append(port);
-                        sb.append((char) COMMA);
-                    }
-                    sb.setCharAt(sb.length() - 1, (char) DOUBLE_QUOTE);
-                    sb.append((char) SEMICOLON);
-                }
-            }
-        }
-
-        sb.setLength(sb.length() - 1);
-        return sb.toString();
-    }
-
-    private static void add(StringBuilder sb, String name, String val) {
-        if (val == null) {
-            addQuoted(sb, name, "");
-            return;
-        }
-
-        for (int i = 0; i < val.length(); i++) {
-            char c = val.charAt(i);
-            switch (c) {
-                case '\t':
-                case ' ':
-                case '"':
-                case '(':
-                case ')':
-                case ',':
-                case '/':
-                case ':':
-                case ';':
-                case '<':
-                case '=':
-                case '>':
-                case '?':
-                case '@':
-                case '[':
-                case '\\':
-                case ']':
-                case '{':
-                case '}':
-                    addQuoted(sb, name, val);
-                    return;
-            }
-        }
-
-        addUnquoted(sb, name, val);
-    }
-
-    private static void addUnquoted(StringBuilder sb, String name, String val) {
-        sb.append(name);
-        sb.append((char) EQUALS);
-        sb.append(val);
-        sb.append((char) SEMICOLON);
-    }
-
-    private static void addQuoted(StringBuilder sb, String name, String val) {
-        if (val == null) {
-            val = "";
-        }
-
-        sb.append(name);
-        sb.append((char) EQUALS);
-        sb.append((char) DOUBLE_QUOTE);
-        sb.append(val.replace("\\", "\\\\").replace("\"", "\\\""));
-        sb.append((char) DOUBLE_QUOTE);
-        sb.append((char) SEMICOLON);
-    }
-
-    private static void add(StringBuilder sb, String name, int val) {
-        sb.append(name);
-        sb.append((char) EQUALS);
-        sb.append(val);
-        sb.append((char) SEMICOLON);
-    }
-
     public static String constructUserAgent(Class<? extends AsyncHttpProvider> httpProvider) {
-        StringBuffer b = new StringBuffer("AsyncHttpClient/1.0")
+        StringBuilder b = new StringBuilder("AsyncHttpClient/1.0")
                 .append(" ")
                 .append("(")
                 .append(httpProvider.getSimpleName())
@@ -491,51 +282,11 @@ public class AsyncHttpProviderUtils {
         return null;
     }
 
-    @Deprecated
-    public static Cookie parseCookie(String value) {
-        return CookieDecoder.decode(value).iterator().next();
-    }
-
-    public static int convertExpireField(String timestring) {
-        String trimmedTimeString = removeQuote(timestring.trim());
-        long now = System.currentTimeMillis();
-        Date date = null;
-
-        for (SimpleDateFormat sdf : simpleDateFormat.get()) {
-            date = sdf.parse(trimmedTimeString, new ParsePosition(0));
-            if (date != null)
-                break;
-        }
-
-        if (date != null) {
-            long maxAgeMillis = date.getTime() - now;
-            return (int) (maxAgeMillis / 1000) + (maxAgeMillis % 1000 != 0? 1 : 0);
-        } else
-            throw new IllegalArgumentException("Not a valid expire field " + trimmedTimeString);
-    }
-
-    private final static String removeQuote(String s) {
-        if (MiscUtil.isNonEmpty(s)) {
-            if (s.charAt(0) == '"')
-                s = s.substring(1);
-
-            if (s.charAt(s.length() - 1) == '"')
-                s = s.substring(0, s.length() - 1);
-        }
-        return s;
-    }
-
-    public static void checkBodyParts(int statusCode, Collection<HttpResponseBodyPart> bodyParts) {
-        if (bodyParts == null || bodyParts.size() == 0) {
-
-            // We allow empty body on 204
-            if (statusCode == 204) return;
-
-            throw new IllegalStateException(BODY_NOT_COMPUTED);
-        }
-    }
-
     public static String keepAliveHeaderValue(AsyncHttpClientConfig config) {
         return config.getAllowPoolingConnection() ? "keep-alive" : "close";
+    }
+    
+    public static int requestTimeout(AsyncHttpClientConfig config, Request request) {
+        return (request.getPerRequestConfig() != null && request.getPerRequestConfig().getRequestTimeoutInMs() != 0) ? request.getPerRequestConfig().getRequestTimeoutInMs() : config.getRequestTimeoutInMs();
     }
 }

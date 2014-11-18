@@ -19,9 +19,6 @@ import static com.ning.http.util.MiscUtil.isNonEmpty;
 
 import com.ning.http.client.FluentCaseInsensitiveStringsMap;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Random;
@@ -57,99 +54,70 @@ public class MultipartRequestEntity implements RequestEntity {
         return bytes;
     }
 
-    private final Logger log = LoggerFactory.getLogger(MultipartRequestEntity.class);
-
     /**
      * The MIME parts as set by the constructor
      */
-    protected Part[] parts;
+    protected final Part[] parts;
 
-    private byte[] multipartBoundary;
+    private final byte[] multipartBoundary;
 
     private final String contentType;
+    
+    private final long contentLength;
 
     /**
      * Creates a new multipart entity containing the given parts.
-     * 
      * @param parts The parts to include.
      */
     public MultipartRequestEntity(Part[] parts, FluentCaseInsensitiveStringsMap requestHeaders) {
-        if (parts == null) {
-            throw new IllegalArgumentException("parts cannot be null");
-        }
+        if (parts == null)
+            throw new NullPointerException("parts");
         this.parts = parts;
         String contentTypeHeader = requestHeaders.getFirstValue("Content-Type");
-        if (isNonEmpty(contentTypeHeader))
-            this.contentType = contentTypeHeader;
-        else
-            this.contentType = MULTIPART_FORM_CONTENT_TYPE;
+        if (isNonEmpty(contentTypeHeader)) {
+        	int boundaryLocation = contentTypeHeader.indexOf("boundary=");
+        	if (boundaryLocation != -1) {
+        		// boundary defined in existing Content-Type
+        		contentType = contentTypeHeader;
+        		multipartBoundary = MultipartEncodingUtil.getAsciiBytes((contentTypeHeader.substring(boundaryLocation + "boundary=".length()).trim()));
+        	} else {
+        		// generate boundary and append it to existing Content-Type
+        		multipartBoundary = generateMultipartBoundary();
+                contentType = computeContentType(contentTypeHeader);
+        	}
+        } else {
+        	multipartBoundary = generateMultipartBoundary();
+            contentType = computeContentType(MULTIPART_FORM_CONTENT_TYPE);
+        }
+        
+        contentLength = Part.getLengthOfParts(parts, multipartBoundary);
+    }
 
+    private String computeContentType(String base) {
+    	StringBuilder buffer = new StringBuilder(base);
+		if (!base.endsWith(";"))
+			buffer.append(";");
+        return buffer.append(" boundary=").append(MultipartEncodingUtil.getAsciiString(multipartBoundary)).toString();
     }
 
     /**
-     * Returns the MIME boundary string that is used to demarcate boundaries of this part. The first call to this method will implicitly create a new boundary string. To create a boundary string first the HttpMethodParams.MULTIPART_BOUNDARY parameter is considered. Otherwise a
-     * random one is generated.
+     * Returns the MIME boundary string that is used to demarcate boundaries of this part.
      * 
      * @return The boundary string of this entity in ASCII encoding.
      */
     protected byte[] getMultipartBoundary() {
-        if (multipartBoundary == null) {
-            multipartBoundary = generateMultipartBoundary();
-        }
         return multipartBoundary;
     }
 
-    /**
-     * Returns <code>true</code> if all parts are repeatable, <code>false</code> otherwise.
-     */
-    public boolean isRepeatable() {
-        for (int i = 0; i < parts.length; i++) {
-            if (!parts[i].isRepeatable()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /*
-     * (non-Javadoc)
-     * 
-     * @see org.apache.commons.httpclient.methods.RequestEntity#writeRequest(java.io.OutputStream)
-     */
     public void writeRequest(OutputStream out) throws IOException {
-        Part.sendParts(out, parts, getMultipartBoundary());
+        Part.sendParts(out, parts, multipartBoundary);
     }
 
-    /*
-     * (non-Javadoc)
-     * 
-     * @see org.apache.commons.httpclient.methods.RequestEntity#getContentLength()
-     */
     public long getContentLength() {
-        try {
-            return Part.getLengthOfParts(parts, getMultipartBoundary());
-        } catch (Exception e) {
-            log.error("An exception occurred while getting the length of the parts", e);
-            return 0;
-        }
+        return contentLength;
     }
 
-    /*
-     * (non-Javadoc)
-     * 
-     * @see org.apache.commons.httpclient.methods.RequestEntity#getContentType()
-     */
     public String getContentType() {
-        if (contentType.contains("boundary="))
-            return contentType;
-        else {
-            StringBuffer buffer = new StringBuffer(contentType);
-            if (!contentType.endsWith(";"))
-                buffer.append(";");
-            buffer.append(" boundary=");
-            buffer.append(MultipartEncodingUtil.getAsciiString(getMultipartBoundary()));
-            return buffer.toString();
-        }
+        return contentType;
     }
-
 }

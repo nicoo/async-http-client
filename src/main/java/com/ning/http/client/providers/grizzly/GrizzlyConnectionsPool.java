@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Sonatype, Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Sonatype, Inc. All rights reserved.
  *
  * This program is licensed to you under the Apache License Version 2.0,
  * and you may not use this file except in compliance with the Apache License Version 2.0.
@@ -16,11 +16,13 @@ package com.ning.http.client.providers.grizzly;
 import com.ning.http.client.AsyncHttpClientConfig;
 import com.ning.http.client.ConnectionsPool;
 
+import org.glassfish.grizzly.CloseListener;
+import org.glassfish.grizzly.CloseType;
 import org.glassfish.grizzly.Connection;
 import org.glassfish.grizzly.Grizzly;
 import org.glassfish.grizzly.attributes.Attribute;
-import org.glassfish.grizzly.attributes.NullaryFunction;
 import org.glassfish.grizzly.utils.DataStructures;
+import org.glassfish.grizzly.utils.NullaryFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,6 +37,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static com.ning.http.util.DateUtil.millisTime;
+import static com.ning.http.client.providers.grizzly.Utils.*;
 
 /**
  * {@link ConnectionsPool} implementation.
@@ -55,34 +60,68 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
     private final int maxConnections;
     private final boolean unlimitedConnections;
     private final long timeout;
+    private final long maxConnectionLifeTimeInMs;
     private final DelayedExecutor delayedExecutor;
-    private final Connection.CloseListener listener;
+
+    private final boolean ownsDelayedExecutor;
+
+    private final CloseListener listener =
+            new CloseListener<Connection, CloseType>() {
+                public void onClosed(Connection connection, CloseType closeType)
+                throws IOException {
+                    if (closeType == CloseType.REMOTELY) {
+                        if (LOG.isInfoEnabled()) {
+                            LOG.info("Remote closed connection ({}).  Removing from cache",
+                                     connection.toString());
+                        }
+                    }
+                    GrizzlyConnectionsPool.this.removeAll(connection);
+                }
+            };
 
 
     // ------------------------------------------------------------ Constructors
+
+
+    @SuppressWarnings("UnusedDeclaration")
+    public GrizzlyConnectionsPool(final boolean cacheSSLConnections,
+                                  final int timeout,
+                                  final int maxConnectionLifeTimeInMs,
+                                  final int maxConnectionsPerHost,
+                                  final int maxConnections,
+                                  final DelayedExecutor delayedExecutor) {
+        this.cacheSSLConnections = cacheSSLConnections;
+        this.timeout = timeout;
+        this.maxConnectionLifeTimeInMs = maxConnectionLifeTimeInMs;
+        this.maxConnectionsPerHost = maxConnectionsPerHost;
+        this.maxConnections = maxConnections;
+        unlimitedConnections = (maxConnections == -1);
+        if (delayedExecutor != null) {
+            this.delayedExecutor = delayedExecutor;
+            ownsDelayedExecutor = false;
+        } else {
+            this.delayedExecutor =
+                    new DelayedExecutor(Executors.newSingleThreadExecutor(),
+                                        this);
+            ownsDelayedExecutor = true;
+        }
+        if (!this.delayedExecutor.isStarted) {
+            this.delayedExecutor.start();
+        }
+    }
 
 
     public GrizzlyConnectionsPool(final AsyncHttpClientConfig config) {
 
         cacheSSLConnections = config.isSslConnectionPoolEnabled();
         timeout = config.getIdleConnectionInPoolTimeoutInMs();
+        maxConnectionLifeTimeInMs = config.getMaxConnectionLifeTimeInMs();
         maxConnectionsPerHost = config.getMaxConnectionPerHost();
         maxConnections = config.getMaxTotalConnections();
         unlimitedConnections = (maxConnections == -1);
-        delayedExecutor = new DelayedExecutor(Executors.newSingleThreadExecutor());
+        delayedExecutor = new DelayedExecutor(Executors.newSingleThreadExecutor(), this);
         delayedExecutor.start();
-        listener = new Connection.CloseListener() {
-            @Override
-            public void onClosed(Connection connection, Connection.CloseType closeType) throws IOException {
-                if (closeType == Connection.CloseType.REMOTELY) {
-                    if (LOG.isInfoEnabled()) {
-                        LOG.info("Remote closed connection ({}).  Removing from cache", connection.toString());
-                    }
-                }
-                GrizzlyConnectionsPool.this.removeAll(connection);
-            }
-        };
-
+        ownsDelayedExecutor = true;
     }
 
 
@@ -94,7 +133,7 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
      */
     public boolean offer(String uri, Connection connection) {
 
-        if (cacheSSLConnections && isSecure(uri)) {
+        if (isSecure(uri) && !cacheSSLConnections) {
             return false;
         }
 
@@ -105,7 +144,7 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
                         new Object[]{uri, connection});
             }
             DelayedExecutor.IdleConnectionQueue newPool =
-                    delayedExecutor.createIdleConnectionQueue(timeout);
+                    delayedExecutor.createIdleConnectionQueue(timeout, maxConnectionLifeTimeInMs);
             conQueue = connectionsPool.putIfAbsent(uri, newPool);
             if (conQueue == null) {
                 conQueue = newPool;
@@ -119,13 +158,14 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
             final int total = totalCachedConnections.incrementAndGet();
             if (LOG.isDebugEnabled()) {
                 LOG.debug("[offer] Pooling connection [{}] for uri [{}].  Current size (for host; before pooling): [{}].  Max size (for host): [{}].  Total number of cached connections: [{}].",
-                        new Object[]{connection, uri, size, maxConnectionsPerHost, total});
+                          connection, uri, size, maxConnectionsPerHost, total);
             }
             return true;
         }
         if (LOG.isDebugEnabled()) {
             LOG.debug("[offer] Unable to pool connection [{}] for uri [{}]. Current size (for host): [{}].  Max size (for host): [{}].  Total number of cached connections: [{}].",
-                    new Object[]{connection, uri, size, maxConnectionsPerHost, totalCachedConnections.get()});
+                      connection, uri, size, maxConnectionsPerHost,
+                      totalCachedConnections.get());
         }
 
         return false;
@@ -190,6 +230,9 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
             boolean removed = entry.getValue().remove(connection);
             isRemoved |= removed;
         }
+        if (isRemoved) {
+            totalCachedConnections.decrementAndGet();
+        }
         return isRemoved;
 
     }
@@ -219,18 +262,10 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
             entry.getValue().destroy();
         }
         connectionsPool.clear();
-        delayedExecutor.stop();
-        delayedExecutor.getThreadPool().shutdownNow();
-
-    }
-
-
-    // --------------------------------------------------------- Private Methods
-
-
-    private boolean isSecure(String uri) {
-
-        return (uri.charAt(0) == 'h' && uri.charAt(4) == 's');
+        if (ownsDelayedExecutor) {
+            delayedExecutor.stop();
+            delayedExecutor.getThreadPool().shutdownNow();
+        }
 
     }
 
@@ -238,7 +273,7 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
     // ---------------------------------------------------------- Nested Classes
 
 
-    private static final class DelayedExecutor {
+    public static final class DelayedExecutor {
 
         public final static long UNSET_TIMEOUT = -1;
         private final ExecutorService threadPool;
@@ -248,24 +283,30 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
         private final Object sync = new Object();
         private volatile boolean isStarted;
         private final long checkIntervalMs;
+        private final AtomicInteger totalCachedConnections;
 
 
         // -------------------------------------------------------- Constructors
 
 
-        private DelayedExecutor(final ExecutorService threadPool) {
-            this(threadPool, 1000, TimeUnit.MILLISECONDS);
+        public DelayedExecutor(final ExecutorService threadPool,
+                        final GrizzlyConnectionsPool connectionsPool) {
+            this(threadPool, 1000, TimeUnit.MILLISECONDS, connectionsPool);
+        }
+
+
+        public DelayedExecutor(final ExecutorService threadPool,
+                               final long checkInterval,
+                               final TimeUnit timeunit,
+                               final GrizzlyConnectionsPool connectionsPool) {
+            this.threadPool = threadPool;
+            this.checkIntervalMs = TimeUnit.MILLISECONDS.convert(checkInterval, timeunit);
+            totalCachedConnections = connectionsPool.totalCachedConnections;
         }
 
 
         // ----------------------------------------------------- Private Methods
 
-        private DelayedExecutor(final ExecutorService threadPool,
-                               final long checkInterval,
-                               final TimeUnit timeunit) {
-            this.threadPool = threadPool;
-            this.checkIntervalMs = TimeUnit.MILLISECONDS.convert(checkInterval, timeunit);
-        }
 
         private void start() {
             synchronized (sync) {
@@ -289,15 +330,15 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
             return threadPool;
         }
 
-        private IdleConnectionQueue createIdleConnectionQueue(final long timeout) {
-            final IdleConnectionQueue queue = new IdleConnectionQueue(timeout);
+        private IdleConnectionQueue createIdleConnectionQueue(final long timeout, final long maxConnectionLifeTimeInMs) {
+            final IdleConnectionQueue queue = new IdleConnectionQueue(timeout, maxConnectionLifeTimeInMs);
             queues.add(queue);
             return queue;
         }
 
         @SuppressWarnings({"NumberEquality"})
-        private static boolean wasModified(final Long l1, final Long l2) {
-            return l1 != l2 && (l1 != null ? !l1.equals(l2) : !l2.equals(l1));
+        private static boolean wasModified(final long l1, final long l2) {
+            return l1 != l2;
         }
 
 
@@ -310,7 +351,7 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
             @Override
             public void run() {
                 while (isStarted) {
-                    final long currentTimeMs = System.currentTimeMillis();
+                    final long currentTimeMs = millisTime();
 
                     for (final IdleConnectionQueue delayQueue : queues) {
                         if (delayQueue.queue.isEmpty()) continue;
@@ -321,7 +362,7 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
                             final Connection element = it.next();
                             final Long timeoutMs = resolver.getTimeoutMs(element);
 
-                            if (timeoutMs == null || timeoutMs == UNSET_TIMEOUT) {
+                            if (timeoutMs == UNSET_TIMEOUT) {
                                 it.remove();
                                 if (wasModified(timeoutMs,
                                                 resolver.getTimeoutMs(element))) {
@@ -337,7 +378,8 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
                                         if (LOG.isDebugEnabled()) {
                                             LOG.debug("Idle connection ({}) detected.  Removing from cache.", element.toString());
                                         }
-                                        element.close().markForRecycle(true);
+                                        totalCachedConnections.decrementAndGet();
+                                        element.close();
                                     } catch (Exception ignored) {
                                     }
                                 }
@@ -367,12 +409,14 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
             final TimeoutResolver resolver = new TimeoutResolver();
             final long timeout;
             final AtomicInteger count = new AtomicInteger(0);
+            final long maxConnectionLifeTimeInMs;
 
             // ---------------------------------------------------- Constructors
 
 
-            public IdleConnectionQueue(final long timeout) {
+            public IdleConnectionQueue(final long timeout, final long maxConnectionLifeTimeInMs) {
                 this.timeout = timeout;
+                this.maxConnectionLifeTimeInMs = maxConnectionLifeTimeInMs;
             }
 
 
@@ -380,9 +424,25 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
 
 
             void offer(final Connection c) {
-                if (timeout >= 0) {
-                    resolver.setTimeoutMs(c, System.currentTimeMillis() + timeout);
+                long timeoutMs = UNSET_TIMEOUT;
+                long currentTime = millisTime();
+                if (maxConnectionLifeTimeInMs < 0 && timeout >= 0) {
+                    timeoutMs = currentTime + timeout;
+                } else if (maxConnectionLifeTimeInMs >= 0) {
+                    long t = resolver.getTimeoutMs(c);
+                    if (t == UNSET_TIMEOUT) {
+                        if (timeout >= 0) {
+                            timeoutMs = currentTime + Math.min(maxConnectionLifeTimeInMs, timeout);
+                        } else {
+                            timeoutMs = currentTime + maxConnectionLifeTimeInMs;
+                        }
+                    } else {
+                        if (timeout >= 0) {
+                            timeoutMs = Math.min(t, currentTime + timeout);
+                        }
+                    }
                 }
+                resolver.setTimeoutMs(c, timeoutMs);
                 queue.offer(c);
                 count.incrementAndGet();
             }
@@ -411,7 +471,7 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
 
             void destroy() {
                 for (Connection c : queue) {
-                    c.close().markForRecycle(true);
+                    c.close();
                 }
                 queue.clear();
                 queues.remove(this);
@@ -445,7 +505,7 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
                 return true;
             }
 
-            Long getTimeoutMs(final Connection c) {
+            long getTimeoutMs(final Connection c) {
                 return IDLE_ATTR.get(c).timeoutMs;
             }
 
@@ -458,7 +518,7 @@ public class GrizzlyConnectionsPool implements ConnectionsPool<String,Connection
 
             static final class IdleRecord {
 
-                volatile long timeoutMs;
+                volatile long timeoutMs = UNSET_TIMEOUT;
 
             } // END IdleRecord
 

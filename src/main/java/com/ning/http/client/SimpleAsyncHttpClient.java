@@ -12,20 +12,22 @@
  */
 package com.ning.http.client;
 
-import com.ning.http.client.resumable.ResumableAsyncHandler;
-import com.ning.http.client.resumable.ResumableIOExceptionFilter;
-import com.ning.http.client.simple.HeaderMap;
-import com.ning.http.client.simple.SimpleAHCTransferListener;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.net.ssl.SSLContext;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
+
+import javax.net.ssl.SSLContext;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.ning.http.client.cookie.Cookie;
+import com.ning.http.client.resumable.ResumableAsyncHandler;
+import com.ning.http.client.resumable.ResumableIOExceptionFilter;
+import com.ning.http.client.simple.HeaderMap;
+import com.ning.http.client.simple.SimpleAHCTransferListener;
 
 /**
  * Simple implementation of {@link AsyncHttpClient} and it's related builders ({@link com.ning.http.client.AsyncHttpClientConfig},
@@ -68,8 +70,9 @@ public class SimpleAsyncHttpClient {
     private final ErrorDocumentBehaviour errorDocumentBehaviour;
     private final SimpleAHCTransferListener listener;
     private final boolean derived;
+    private String providerClass;
 
-    private SimpleAsyncHttpClient(AsyncHttpClientConfig config, RequestBuilder requestBuilder, ThrowableHandler defaultThrowableHandler, ErrorDocumentBehaviour errorDocumentBehaviour, boolean resumeEnabled, AsyncHttpClient ahc, SimpleAHCTransferListener listener) {
+    private SimpleAsyncHttpClient(AsyncHttpClientConfig config, RequestBuilder requestBuilder, ThrowableHandler defaultThrowableHandler, ErrorDocumentBehaviour errorDocumentBehaviour, boolean resumeEnabled, AsyncHttpClient ahc, SimpleAHCTransferListener listener, String providerClass) {
         this.config = config;
         this.requestBuilder = requestBuilder;
         this.defaultThrowableHandler = defaultThrowableHandler;
@@ -77,6 +80,7 @@ public class SimpleAsyncHttpClient {
         this.errorDocumentBehaviour = errorDocumentBehaviour;
         this.asyncHttpClient = ahc;
         this.listener = listener;
+        this.providerClass = providerClass;
 
         this.derived = ahc != null;
     }
@@ -287,7 +291,10 @@ public class SimpleAsyncHttpClient {
     private AsyncHttpClient asyncHttpClient() {
         synchronized (config) {
             if (asyncHttpClient == null) {
-                asyncHttpClient = new AsyncHttpClient(config);
+                if (providerClass == null)
+                    asyncHttpClient = new AsyncHttpClient(config);
+                else
+                    asyncHttpClient = new AsyncHttpClient(providerClass, config);
             }
         }
         return asyncHttpClient;
@@ -360,9 +367,9 @@ public class SimpleAsyncHttpClient {
 
         DerivedBuilder setUrl(String url);
 
-        DerivedBuilder setParameters(FluentStringsMap parameters) throws IllegalArgumentException;
+        DerivedBuilder setParameters(FluentStringsMap parameters);
 
-        DerivedBuilder setParameters(Map<String, Collection<String>> parameters) throws IllegalArgumentException;
+        DerivedBuilder setParameters(Map<String, Collection<String>> parameters);
 
         DerivedBuilder setHeaders(Map<String, Collection<String>> headers);
 
@@ -372,13 +379,13 @@ public class SimpleAsyncHttpClient {
 
         DerivedBuilder addQueryParameter(String name, String value);
 
-        DerivedBuilder addParameter(String key, String value) throws IllegalArgumentException;
+        DerivedBuilder addParameter(String key, String value);
 
         DerivedBuilder addHeader(String name, String value);
 
         DerivedBuilder addCookie(Cookie cookie);
 
-        DerivedBuilder addBodyPart(Part part) throws IllegalArgumentException;
+        DerivedBuilder addBodyPart(Part part);
 
         DerivedBuilder setResumableDownload(boolean resume);
 
@@ -400,6 +407,7 @@ public class SimpleAsyncHttpClient {
         private ErrorDocumentBehaviour errorDocumentBehaviour = ErrorDocumentBehaviour.WRITE;
         private AsyncHttpClient ahc = null;
         private SimpleAHCTransferListener listener = null;
+        private String providerClass = null;
 
         public Builder() {
             requestBuilder = new RequestBuilder("GET", false);
@@ -414,7 +422,7 @@ public class SimpleAsyncHttpClient {
             this.listener = client.listener;
         }
 
-        public Builder addBodyPart(Part part) throws IllegalArgumentException {
+        public Builder addBodyPart(Part part) {
             requestBuilder.addBodyPart(part);
             return this;
         }
@@ -429,7 +437,7 @@ public class SimpleAsyncHttpClient {
             return this;
         }
 
-        public Builder addParameter(String key, String value) throws IllegalArgumentException {
+        public Builder addParameter(String key, String value) {
             requestBuilder.addParameter(key, value);
             return this;
         }
@@ -454,12 +462,12 @@ public class SimpleAsyncHttpClient {
             return this;
         }
 
-        public Builder setParameters(Map<String, Collection<String>> parameters) throws IllegalArgumentException {
+        public Builder setParameters(Map<String, Collection<String>> parameters) {
             requestBuilder.setParameters(parameters);
             return this;
         }
 
-        public Builder setParameters(FluentStringsMap parameters) throws IllegalArgumentException {
+        public Builder setParameters(FluentStringsMap parameters) {
             requestBuilder.setParameters(parameters);
             return this;
         }
@@ -521,11 +529,6 @@ public class SimpleAsyncHttpClient {
 
         public Builder setAllowPoolingConnection(boolean allowPoolingConnection) {
             configBuilder.setAllowPoolingConnection(allowPoolingConnection);
-            return this;
-        }
-
-        public Builder setScheduledExecutorService(ScheduledExecutorService reaper) {
-            configBuilder.setScheduledExecutorService(reaper);
             return this;
         }
 
@@ -659,6 +662,11 @@ public class SimpleAsyncHttpClient {
             return this;
         }
 
+        public Builder setProviderClass(String providerClass) {
+            this.providerClass = providerClass;
+            return this;
+        }
+
         public SimpleAsyncHttpClient build() {
 
             if (realmBuilder != null) {
@@ -671,7 +679,7 @@ public class SimpleAsyncHttpClient {
 
             configBuilder.addIOExceptionFilter(new ResumableIOExceptionFilter());
 
-            SimpleAsyncHttpClient sc = new SimpleAsyncHttpClient(configBuilder.build(), requestBuilder, defaultThrowableHandler, errorDocumentBehaviour, enableResumableDownload, ahc, listener);
+            SimpleAsyncHttpClient sc = new SimpleAsyncHttpClient(configBuilder.build(), requestBuilder, defaultThrowableHandler, errorDocumentBehaviour, enableResumableDownload, ahc, listener, providerClass);
 
             return sc;
         }

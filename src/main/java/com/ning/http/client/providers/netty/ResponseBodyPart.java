@@ -32,23 +32,20 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class ResponseBodyPart extends HttpResponseBodyPart {
 
-    private final HttpChunk chunk;
-    private final HttpResponse response;
+    private final ChannelBuffer content;
     private final AtomicReference<byte[]> bytes = new AtomicReference<byte[]>(null);
     private final boolean isLast;
+    private final int length;
     private boolean closeConnection = false;
 
     public ResponseBodyPart(URI uri, HttpResponse response, AsyncHttpProvider provider, boolean last) {
-        super(uri, provider);
-        isLast = last;
-        this.chunk = null;
-        this.response = response;
+        this(uri, response, provider, null, last);
     }
 
     public ResponseBodyPart(URI uri, HttpResponse response, AsyncHttpProvider provider, HttpChunk chunk, boolean last) {
         super(uri, provider);
-        this.chunk = chunk;
-        this.response = response;
+        content = chunk != null ? chunk.getContent() : response.getContent();
+        length = content.readableBytes();
         isLast = last;
     }
 
@@ -63,9 +60,9 @@ public class ResponseBodyPart extends HttpResponseBodyPart {
             return bytes.get();
         }
 
-        byte[] rb = ChannelBufferUtil.channelBuffer2bytes(getChannelBuffer());
-        bytes.set(rb);
-        return rb;
+        byte[] b = ChannelBufferUtil.channelBuffer2bytes(content);
+        bytes.set(b);
+        return b;
     }
 
     public int writeTo(OutputStream outputStream) throws IOException {
@@ -80,7 +77,7 @@ public class ResponseBodyPart extends HttpResponseBodyPart {
     }
 
     public ChannelBuffer getChannelBuffer() {
-        return chunk != null ? chunk.getContent() : response.getContent();
+        return content;
     }
 
     @Override
@@ -112,7 +109,8 @@ public class ResponseBodyPart extends HttpResponseBodyPart {
         return closeConnection;
     }
 
-    protected HttpChunk chunk() {
-        return chunk;
+    @Override
+    public int length() {
+        return length;
     }
 }
